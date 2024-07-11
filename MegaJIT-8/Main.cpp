@@ -72,16 +72,12 @@ void draw()
     const auto& screenBuf = chipCore->getScreenBuffer();
     std::array<uint8_t, ChipState::SCRHeight* ChipState::SCRWidth> textureBuf{};
 
-    if (s.enableDrawLocking)
-    {
-        while (s.drawLock.exchange(true)) {}
-    }
+    while (s.drawLock.exchange(true)) {}
 
     for (int i = 0; i < ChipState::SCRWidth * ChipState::SCRHeight; i++)
         textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
 
-    if (s.enableDrawLocking)
-        s.drawLock.store(false);
+    s.drawLock.store(false);
 
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCRWidth, ChipState::SCRHeight, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);

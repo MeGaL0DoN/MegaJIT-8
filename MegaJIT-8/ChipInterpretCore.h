@@ -1,5 +1,4 @@
 #include <random>
-#include <array>
 
 #include "ChipState.h"
 #include "ChipCore.h"
@@ -10,24 +9,22 @@ extern ChipState s;
 class ChipInterpretCore : public ChipCore
 {
 public:
-
 	uint16_t execute() override
 	{
 		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
 			return 0;
 
 		const uint16_t opcode = (s.RAM[s.pc] << 8) | s.RAM[s.pc + 1];
-
-		const uint8_t xOperand = (opcode & 0x0F00) >> 8;
-		const uint8_t yOperand = (opcode & 0x00F0) >> 4;
-
-		uint8_t& regX = s.V[xOperand];
-		const uint8_t regY = s.V[yOperand];
-
-		const uint8_t doubleNibble = opcode & 0x00FF;
-		const uint16_t memoryAddr = opcode & 0x0FFF;
-
 		s.pc += 2;
+
+		#define memoryAddr (opcode & 0x0FFF)
+		#define doubleNibble (opcode & 0x00FF)
+		#define xOperand ((opcode & 0x0F00) >> 8)
+
+		#define regY s.V[(opcode & 0x00F0) >> 4]
+		#define regX s.V[xOperand]
+
+		#define skipNextInstr() s.pc += 2
 
 		switch (opcode & 0xF000)
 		{
@@ -200,18 +197,23 @@ public:
 		}
 
 		return 1;
+
+		#undef memoryAddr
+		#undef doubleNibble
+		#undef xOperand
+		#undef regY
+		#undef regX
+		#undef skipNextInstr
 	}
 
 private:
 	std::default_random_engine rngEng { std::random_device{}() };
-	std::uniform_int_distribution<> rngDistr { 0, 255 };;
+	std::uniform_int_distribution<> rngDistr { 0, 255 };
 
 	void initialize() override
 	{
 		s.reset();
 	}
-
-	constexpr void skipNextInstr() { s.pc += 2; }
 
 	inline void clearScreen()
 	{

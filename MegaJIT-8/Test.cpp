@@ -20,7 +20,7 @@
 //    ChipInterpretCore ch;
 //#endif
 //
-//    ch.loadROM("1dcell.benchmark");
+//    ch.loadROM("ROMs/1dcell.benchmark");
 //
 //    auto start = std::chrono::high_resolution_clock::now();
 //    uint64_t totalInstructions = 0;
