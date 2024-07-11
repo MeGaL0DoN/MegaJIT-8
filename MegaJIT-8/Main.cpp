@@ -73,7 +73,9 @@ void draw()
     std::array<uint8_t, ChipState::SCRHeight* ChipState::SCRWidth> textureBuf{};
 
     if (s.enableDrawLocking)
-		while (s.drawLock.load()) {}
+    {
+        while (s.drawLock.exchange(true)) {}
+    }
 
     for (int i = 0; i < ChipState::SCRWidth * ChipState::SCRHeight; i++)
         textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
