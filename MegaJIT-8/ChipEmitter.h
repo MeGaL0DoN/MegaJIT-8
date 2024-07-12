@@ -72,8 +72,8 @@ private:
 		return false;
 	}
 
-#define V_REG(num) (GET_VREG(num) ? (Xbyak::Operand&)*Vreg : (Xbyak::Operand&)REG_PTR(num))
-#define I_REG (IregAllocated ? (Xbyak::Operand&)r15w : (Xbyak::Operand&)I_REG_PTR)
+#define V_REG(num) (GET_VREG(num) ? (const Xbyak::Operand&)*Vreg : (const Xbyak::Operand&)REG_PTR(num))
+#define I_REG (IregAllocated ? (const Xbyak::Operand&)r15w : (const Xbyak::Operand&)I_REG_PTR)
 
 	template <typename Op>
 	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
@@ -311,7 +311,7 @@ public:
 
 	inline uint16_t execute(uint32_t offset) const
 	{
-		return reinterpret_cast<uint16_t(*)()>(getCode() + offset)();
+		return reinterpret_cast<uint16_t(*)()>(const_cast<uint8_t*>(getCode()) + offset)();
 	}
 
 	inline void emit00E0()
