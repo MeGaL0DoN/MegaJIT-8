@@ -1,0 +1,13 @@
+ninja_dyndep_version = 1.0
+build CMakeFiles\MegaJIT_8.dir\main.cpp.obj: dyndep
+
+build CMakeFiles\MegaJIT_8.dir\Shader.cpp.obj: dyndep
+
+build CMakeFiles\MegaJIT_8.dir\Test.cpp.obj: dyndep
+
+build CMakeFiles\MegaJIT_8.dir\ChipCore.cpp.obj: dyndep
+
+build CMakeFiles\MegaJIT_8.dir\ChipJITState.cpp.obj: dyndep
+
+build CMakeFiles\MegaJIT_8.dir\ChipState.cpp.obj: dyndep
+

@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "CMakeFiles\\MegaJIT_8.dir\\ChipJITState.cpp.obj",
+            "outputs": [
+                "C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\cmake-build-debug\\vc140.pdb",
+                "CMakeFiles\\MegaJIT_8.dir\\ChipJITState.cpp.obj.ddi"
+            ],
+            "requires": []
+        }
+    ]
+}

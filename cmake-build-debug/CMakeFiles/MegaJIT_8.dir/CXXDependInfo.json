@@ -1,0 +1,25 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "MSVC",
+	"compiler-id" : "MSVC",
+	"compiler-simulate-id" : "",
+	"config" : "Debug",
+	"cxx-modules" : {},
+	"dir-cur-bld" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug",
+	"dir-cur-src" : "C:/Users/sidor/CLionProjects/MegaJIT-8",
+	"dir-top-bld" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug",
+	"dir-top-src" : "C:/Users/sidor/CLionProjects/MegaJIT-8",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\glad\\..",
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\GLFW\\include",
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\nativefiledialog-extended\\src\\include",
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\udis86\\include",
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\ImGUI\\.."
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug/CMakeFiles/MegaJIT_8.dir"
+}

@@ -1,0 +1,22 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "MSVC",
+	"compiler-id" : "MSVC",
+	"compiler-simulate-id" : "",
+	"config" : "Debug",
+	"cxx-modules" : {},
+	"dir-cur-bld" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug/Libs/ImGUI",
+	"dir-cur-src" : "C:/Users/sidor/CLionProjects/MegaJIT-8/Libs/ImGUI",
+	"dir-top-bld" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug",
+	"dir-top-src" : "C:/Users/sidor/CLionProjects/MegaJIT-8",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\ImGUI\\..",
+		"C:\\Users\\sidor\\CLionProjects\\MegaJIT-8\\Libs\\GLFW\\include"
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-debug/Libs/ImGUI/CMakeFiles/imgui.dir"
+}

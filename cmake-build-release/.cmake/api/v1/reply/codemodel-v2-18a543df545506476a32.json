@@ -1,0 +1,328 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1,
+						2,
+						5,
+						7,
+						8
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Release-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.28"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0
+					]
+				},
+				{
+					"build" : "Libs/glad",
+					"jsonFile" : "directory-Libs.glad-Release-442b221ef29d70cff67e.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.28"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 1,
+					"source" : "Libs/glad",
+					"targetIndexes" : 
+					[
+						2
+					]
+				},
+				{
+					"build" : "Libs/GLFW",
+					"childIndexes" : 
+					[
+						3,
+						4
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-Libs.GLFW-Release-6b3a6dc1b7a04fd2e07d.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.4"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 2,
+					"source" : "Libs/GLFW",
+					"targetIndexes" : 
+					[
+						7
+					]
+				},
+				{
+					"build" : "Libs/GLFW/src",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-Libs.GLFW.src-Release-2de2db5f53203a500d38.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.4"
+					},
+					"parentIndex" : 2,
+					"projectIndex" : 2,
+					"source" : "Libs/GLFW/src",
+					"targetIndexes" : 
+					[
+						3,
+						8
+					]
+				},
+				{
+					"build" : "Libs/GLFW/docs",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-Libs.GLFW.docs-Release-5e1402696e63fe3187e4.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.4"
+					},
+					"parentIndex" : 2,
+					"projectIndex" : 2,
+					"source" : "Libs/GLFW/docs",
+					"targetIndexes" : 
+					[
+						1
+					]
+				},
+				{
+					"build" : "Libs/nativefiledialog-extended",
+					"childIndexes" : 
+					[
+						6
+					],
+					"jsonFile" : "directory-Libs.nativefiledialog-extended-Release-94b4ae38180a8c641a8a.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 3,
+					"source" : "Libs/nativefiledialog-extended"
+				},
+				{
+					"build" : "Libs/nativefiledialog-extended/src",
+					"jsonFile" : "directory-Libs.nativefiledialog-extended.src-Release-9634a45c3058987fb5e3.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"parentIndex" : 5,
+					"projectIndex" : 3,
+					"source" : "Libs/nativefiledialog-extended/src",
+					"targetIndexes" : 
+					[
+						5
+					]
+				},
+				{
+					"build" : "Libs/udis86",
+					"jsonFile" : "directory-Libs.udis86-Release-f2adf1553ce4954d0f80.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.28"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 4,
+					"source" : "Libs/udis86",
+					"targetIndexes" : 
+					[
+						6
+					]
+				},
+				{
+					"build" : "Libs/ImGUI",
+					"jsonFile" : "directory-Libs.ImGUI-Release-f4a08d75a1d425d85b4f.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.28"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 5,
+					"source" : "Libs/ImGUI",
+					"targetIndexes" : 
+					[
+						4
+					]
+				}
+			],
+			"name" : "Release",
+			"projects" : 
+			[
+				{
+					"childIndexes" : 
+					[
+						1,
+						2,
+						3,
+						4,
+						5
+					],
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "MegaJIT_8",
+					"targetIndexes" : 
+					[
+						0
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						1
+					],
+					"name" : "glad",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						2
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						2,
+						3,
+						4
+					],
+					"name" : "GLFW",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						1,
+						3,
+						7,
+						8
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						5,
+						6
+					],
+					"name" : "nativefiledialog-extended",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						5
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						7
+					],
+					"name" : "udis86",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						6
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						8
+					],
+					"name" : "imgui",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						4
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "MegaJIT_8::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-MegaJIT_8-Release-1b5d0b1e943b9e0669f5.json",
+					"name" : "MegaJIT_8",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "docs::@5f743fc2c25a6e98bd0a",
+					"jsonFile" : "target-docs-Release-ceea96cc3e4000817bbd.json",
+					"name" : "docs",
+					"projectIndex" : 2
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "glad::@4e5e0c9340cc2f01a73d",
+					"jsonFile" : "target-glad-Release-3b11a5b2e6c115e8e90c.json",
+					"name" : "glad",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 3,
+					"id" : "glfw::@857e4ea2fbc185dbb594",
+					"jsonFile" : "target-glfw-Release-64ce5f75101b65ed51df.json",
+					"name" : "glfw",
+					"projectIndex" : 2
+				},
+				{
+					"directoryIndex" : 8,
+					"id" : "imgui::@ad23b01b9efd540a5c6e",
+					"jsonFile" : "target-imgui-Release-639e66de3ef3a4f32465.json",
+					"name" : "imgui",
+					"projectIndex" : 5
+				},
+				{
+					"directoryIndex" : 6,
+					"id" : "nfd::@c5f2db87a56a8ebb9aba",
+					"jsonFile" : "target-nfd-Release-8346f9442a39ed7d3fe1.json",
+					"name" : "nfd",
+					"projectIndex" : 3
+				},
+				{
+					"directoryIndex" : 7,
+					"id" : "udis86::@c13525382ec140b8c66e",
+					"jsonFile" : "target-udis86-Release-a64e830648220970a233.json",
+					"name" : "udis86",
+					"projectIndex" : 4
+				},
+				{
+					"directoryIndex" : 2,
+					"id" : "uninstall::@dda28352e01937e8236c",
+					"jsonFile" : "target-uninstall-Release-9e6b01feeb839246121d.json",
+					"name" : "uninstall",
+					"projectIndex" : 2
+				},
+				{
+					"directoryIndex" : 3,
+					"id" : "update_mappings::@857e4ea2fbc185dbb594",
+					"jsonFile" : "target-update_mappings-Release-6c440bffcc3a8e6acc9c.json",
+					"name" : "update_mappings",
+					"projectIndex" : 2
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/sidor/CLionProjects/MegaJIT-8/cmake-build-release",
+		"source" : "C:/Users/sidor/CLionProjects/MegaJIT-8"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 6
+	}
+}
