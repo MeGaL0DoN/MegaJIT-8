@@ -4,7 +4,7 @@ MegaJIT-8 is a Chip 8 emulator with x86-64 JIT-compiler, made in C++ using GLFW,
 
 ## Build
 
-Windows, Linux, and MacOS build using cmake with any C++/20 compiler. All dependencies are included as source.
+Windows, Linux, and MacOS build using cmake is supported with any C++/20 compiler. All libraries are included as source.
 
 ### Usage:
 
