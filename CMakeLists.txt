@@ -8,6 +8,8 @@ if(MSVC)
             $<$<CONFIG:>:/MT> #---------|
             $<$<CONFIG:Release>:/MT> #--|
     )
+elseif(MINGW)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 endif()
 
 add_executable(MegaJIT_8 main.cpp
@@ -28,12 +30,17 @@ add_executable(MegaJIT_8 main.cpp
         ChipJITCore.h
 )
 
-if (WIN32)
+if (MSVC)
     set_target_properties(
-    MegaJIT_8
-    PROPERTIES LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
-               LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
+    MegaJIT_8 PROPERTIES
+            LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+            LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
 )
+elseif(MINGW)
+    set_target_properties(
+            MegaJIT_8 PROPERTIES
+            LINK_FLAGS_RELEASE "-Wl,-subsystem,windows -s"
+    )
 endif()
 
 file(COPY ROMs DESTINATION ${CMAKE_BINARY_DIR})
