@@ -18,8 +18,9 @@ Keyboard layout is:
 
 Under CPU menu tab, it is possible to switch between interpreter and JIT while running the ROM. In JIT mode, disassembly containing the compiled code can be exported. Unlimited mode checkbox is used for benchmarking. When it is enabled, Emulator works on maximum speed, and number of millions of instructions per second is displayed.
 
-### Demo - 700 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
-https://github.com/MeGaL0DoN/MegaJIT-8/assets/62940883/805ccc04-22db-4010-aa72-58fde9492498
+### Demo - 820 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
+https://github.com/user-attachments/assets/c9e67ff4-01ac-483e-a059-5966ffb296a0
+
 
 ## License
 
