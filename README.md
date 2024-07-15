@@ -20,3 +20,7 @@ Under CPU menu tab, it is possible to switch between interpreter and JIT while r
 
 ### Demo - 700 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
 https://github.com/MeGaL0DoN/MegaJIT-8/assets/62940883/805ccc04-22db-4010-aa72-58fde9492498
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE.md file for details
