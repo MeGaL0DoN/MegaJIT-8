@@ -3,6 +3,13 @@ project(MegaJIT_8)
 
 set(CMAKE_CXX_STANDARD 20)
 
+if(MSVC)
+    add_compile_options(
+            $<$<CONFIG:>:/MT> #---------|
+            $<$<CONFIG:Release>:/MT> #--|
+    )
+endif()
+
 add_executable(MegaJIT_8 main.cpp
         main.cpp
         Quirks.h
@@ -21,13 +28,6 @@ add_executable(MegaJIT_8 main.cpp
         ChipJITCore.h
 )
 
-if(MSVC)
-    add_compile_options(
-            $<$<CONFIG:>:/MT> #---------|
-            $<$<CONFIG:Release>:/MT> #--|
-    )
-endif()
-
 if (WIN32)
     set_target_properties(
     MegaJIT_8
@@ -35,6 +35,8 @@ if (WIN32)
                LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
 )
 endif()
+
+file(COPY ROMs DESTINATION ${CMAKE_BINARY_DIR})
 
 add_subdirectory("Libs/glad")
 target_link_libraries(MegaJIT_8 glad)
