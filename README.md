@@ -4,7 +4,7 @@ MegaJIT-8 is a Chip 8 emulator with x86-64 JIT-compiler, made in C++ using GLFW,
 
 ## Build
 
-Windows, Linux, and MacOS build using cmake with any C++/20 compiler. All dependencies are included as source.
+Windows, Linux, and MacOS build using cmake is supported with any C++/20 compiler. All libraries are included as source.
 
 ### Usage:
 
@@ -18,5 +18,10 @@ Keyboard layout is:
 
 Under CPU menu tab, it is possible to switch between interpreter and JIT while running the ROM. In JIT mode, disassembly containing the compiled code can be exported. Unlimited mode checkbox is used for benchmarking. When it is enabled, Emulator works on maximum speed, and number of millions of instructions per second is displayed.
 
-### Demo - 700 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
-https://github.com/MeGaL0DoN/MegaJIT-8/assets/62940883/805ccc04-22db-4010-aa72-58fde9492498
+### Demo - 820 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
+https://github.com/user-attachments/assets/c9e67ff4-01ac-483e-a059-5966ffb296a0
+
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE.md file for details
