@@ -41,6 +41,11 @@ elseif(MINGW)
             MegaJIT_8 PROPERTIES
             LINK_FLAGS_RELEASE "-Wl,-subsystem,windows -s"
     )
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_target_properties(
+            MegaJIT_8 PROPERTIES
+            LINK_FLAGS_RELEASE "-s"
+    )
 endif()
 
 file(COPY ROMs DESTINATION ${CMAKE_BINARY_DIR})
