@@ -10,63 +10,61 @@ out vec4 FragColor;
 in vec2 TexCoord;
 
 uniform sampler2D texture1;
+
 uniform vec4 backgroundCol;
 uniform vec4 foregroundCol;
+uniform bool rainbow;
 
 void main()
 {
-     vec4 text = texture(texture1, TexCoord);
-	 FragColor = text.r == 0 ? backgroundCol : foregroundCol;
+    vec4 text = texture(texture1, TexCoord);
+
+    if (text.r == 0)
+    {
+        FragColor = backgroundCol;
+    }
+    else if (rainbow)
+    {
+        float y = TexCoord.y;
+        vec4 color;
+
+        if (y < 1.0 / 7.0)
+        {
+            color = vec4(1.0, 0.0, 0.0, 1.0); // Red
+        }
+        else if (y < 2.0 / 7.0)
+        {
+            color = vec4(1.0, 0.5, 0.0, 1.0); // Orange
+        }
+        else if (y < 3.0 / 7.0)
+        {
+            color = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
+        }
+        else if (y < 4.0 / 7.0)
+        {
+            color = vec4(0.0, 1.0, 0.0, 1.0); // Green
+        }
+        else if (y < 5.0 / 7.0)
+        {
+            color = vec4(0.0, 0.0, 1.0, 1.0); // Blue
+        }
+        else if (y < 6.0 / 7.0)
+        {
+            color = vec4(0.3, 0.0, 0.51, 1.0); // Indigo
+        }
+        else
+        {
+            color = vec4(0.58, 0.0, 0.83, 1.0); // Violet
+        }
+
+        FragColor = color;
+    }
+    else
+    {
+        FragColor = foregroundCol;
+    }
 }
 )";
-
-
-//	inline constexpr const char* fragmentShader = R"(
-//#version 330 core
-//
-//out vec4 FragColor;
-//in vec2 TexCoord;
-//
-//uniform sampler2D texture1;
-//uniform vec4 backgroundCol;
-//uniform vec4 foregroundCol;
-//
-//uniform vec2 windowSize;    
-//
-//void main()
-//{
-//    vec4 text = texture(texture1, TexCoord);
-//
-//    if (text.r == 0)
-//    {
-//        FragColor = backgroundCol;
-//    }
-//    else
-//    {
-//        // Calculate the pixel size in normalized coordinates
-//        vec2 pixelSize = vec2(1.0 / 64.0, 1.0 / 32.0);
-//
-//        // Convert TexCoord to the position within the texture grid
-//        vec2 pos = TexCoord / pixelSize;
-//
-//        // Determine the gap size in normalized coordinates (adjust as needed)
-//        float gapX = 0.05;
-//        float gapY = 0.05;
-//
-//
-//
-//        if (fract(pos.x) < gapX || fract(pos.y) < gapY)
-//        {
-//            FragColor = vec4(0.0, 0.0, 0.0, 1.0); // Gap color
-//        }
-//        else 
-//        {
-//            FragColor = foregroundCol;
-//        }
-//    }
-//};
-//)";
-
 
 	inline constexpr const char* vertexShader = R"(
 #version 330 core

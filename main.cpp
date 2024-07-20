@@ -36,6 +36,7 @@ bool unlimitedMode{ false };
 int CPUfrequency{ 500 };
 bool paused{ false };
 
+bool enableRainbow { false };
 Shader pixelShader;
 uint32_t chipTexture;
 
@@ -133,6 +134,8 @@ void setBuffers()
 
     constexpr std::array<float, 4> blackColor = { 0.0f, 0.0f, 0.0f, 1.0f };
     pixelShader.setFloat4("backgroundCol", blackColor.data());
+
+    pixelShader.setBool("rainbow", false);
 }
 
 template <bool JIT>
@@ -250,7 +253,6 @@ void renderImGUI()
             if (ChipCore::enableAudio)
             {
                 ImGui::Separator();
-                ImGui::Spacing();
 
                 if (ImGui::SliderInt("Volume", &volume, 0, 100))
                     ChipCore::setVolume(volume / 100.0);
@@ -258,26 +260,39 @@ void renderImGUI()
 
             ImGui::SeparatorText("UI");
 
-            static ImVec4 foregroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-            static ImVec4 backgroundColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-
-            ImGui::Text("Foreground Color");
-            ImGui::SameLine();
-
-            if (ImGui::ArrowButton("foregroundPicker", ImGuiDir_Down))
+            if (ImGui::Checkbox("Rainbow Screen", &enableRainbow))
             {
-                showForegroundPicker = !showForegroundPicker;
-                showBackgroundPicker = false;
-            }
-
-            if (showForegroundPicker)
-            {
-                if (ImGui::ColorPicker3("Pick a Color", (float*)&foregroundColor))
-                    pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
+                pixelShader.setBool("rainbow", enableRainbow);
+                showForegroundPicker = false;
             }
 
             ImGui::Separator();
             ImGui::Spacing();
+
+            static ImVec4 foregroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            static ImVec4 backgroundColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+            if (!enableRainbow)
+            {
+                ImGui::Text("Foreground Color");
+                ImGui::SameLine();
+
+                if (ImGui::ArrowButton("foregroundPicker", ImGuiDir_Down))
+                {
+                    showForegroundPicker = !showForegroundPicker;
+                    showBackgroundPicker = false;
+                }
+
+                if (showForegroundPicker)
+                {
+                    if (ImGui::ColorPicker3("Pick a Color", (float*)&foregroundColor))
+                        pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
+                }
+
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+
             ImGui::Text("Background Color");
             ImGui::SameLine();
 
@@ -301,6 +316,12 @@ void renderImGUI()
 
                 pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
                 pixelShader.setFloat4("backgroundCol", (float*)&backgroundColor);
+
+                showForegroundPicker = false;
+                showBackgroundPicker = false;
+
+                enableRainbow = false;
+                pixelShader.setBool("rainbow", false);
 
                 ChipCore::enableAudio = true;
 
