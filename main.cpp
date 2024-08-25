@@ -508,12 +508,34 @@ void window_refresh_callback(GLFWwindow* _window)
     if (!fileDialogOpen) render();
 }
 
+#ifdef _WIN32
+#include <Windows.h>
+
+inline std::wstring ToUTF16(const std::string& utf8Str)
+{
+    const auto size = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), utf8Str.length(), nullptr, 0);
+
+    if (size <= 0)
+        return L"";
+
+    std::wstring result(size, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), utf8Str.length(), result.data(), size);
+    return result;
+}
+#endif
+
 void drop_callback(GLFWwindow* _window, int count, const char** paths)
 {
     (void)_window;
 
     if (count > 0)
-        loadROM(paths[0]);
+    {
+#ifdef _WIN32
+		loadROM(ToUTF16(paths[0]));
+#else
+		loadROM(paths[0]);
+#endif
+    }
 }
 
 void setWindowSize()
