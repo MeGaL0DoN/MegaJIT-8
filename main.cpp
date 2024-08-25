@@ -399,6 +399,11 @@ void renderImGUI()
 
                 if (ImGui::Checkbox("Draw Sync", &s.enableDrawLocking))
                     clearJITcache();
+
+                ImGui::Spacing();
+
+                if (ImGui::Checkbox("Dont count branched-out instructions", &Quirks::SubtractJITBranches))
+                    clearJITcache();
 			}
 
             ImGui::Spacing();

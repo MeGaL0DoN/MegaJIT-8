@@ -7,6 +7,8 @@ namespace Quirks
 	static bool Shifting { true };
 	static bool Jumping { false };
 
+	static bool SubtractJITBranches { true };
+
 	inline void Reset()
 	{
 		VFReset = true;

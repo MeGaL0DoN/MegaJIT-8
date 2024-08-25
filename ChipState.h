@@ -29,5 +29,7 @@ struct ChipState
 	std::atomic<bool> drawLock { false };
 	bool enableDrawLocking { false };
 
+	uint8_t BLOCK_NOT_TAKEN_BRANCHES{ 0 };
+
 	void reset();
 };

@@ -49,6 +49,7 @@ private:
 	std::vector<uint8_t> allocatedRegs{};
 	bool IregAllocated{ false };
 	bool flagRegAllocated{ false };
+	uint8_t blockBranches { 0 };
 
 #define I_FULL_REG r15
 
@@ -248,7 +249,7 @@ private:
 
 	/////////////////////////
 
-	inline void reset_allocated()
+	inline void resetState()
 	{
 		allocatedRegs.clear();
 		std::memset(VRegUsage.data(), 0, VRegUsage.size());
@@ -256,6 +257,7 @@ private:
 		IregAllocated = false;
 		flagRegAllocated = false;
 		instructions = 0;
+		blockBranches = 0;
 	}
 
 public:
@@ -317,6 +319,14 @@ public:
 			pop(V_FULL_REG(i));
 		}
 
+		mov(eax, instructions - blockBranches);
+
+		if (blockBranches > 0)
+		{
+			add(eax, byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			mov(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 0);
+		}
+
 		if (IregAllocated)
 		{
 			mov(I_REG_PTR, I_REG);
@@ -324,10 +334,9 @@ public:
 		}
 
 		pop(rbp);
-		mov(eax, instructions);
 		ret();
 
-		reset_allocated();
+		resetState();
 	}
 
 	inline uint16_t execute(uint32_t offset) const
@@ -348,9 +357,12 @@ public:
 
 	inline void clearCache() { resetSize(); }
 
-	void emitLabel()
-	{
+	void emitJumpLabel()
+	{		
 		L("@@");
+
+		if (Quirks::SubtractJITBranches)
+			blockBranches++;
 	}
 
 	inline void emit00EE()
@@ -388,6 +400,9 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f");
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{
@@ -407,6 +422,9 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f");
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{
@@ -426,6 +444,9 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f");
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{
@@ -445,6 +466,9 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f");
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{
@@ -465,6 +489,9 @@ public:
 		{
 			test(cl, cl);
 			jnz("@f", T_NEAR);
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{
@@ -483,6 +510,9 @@ public:
 		{
 			test(cl, cl);
 			jz("@f");
+
+			if (Quirks::SubtractJITBranches)
+				add(byte[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 1);
 		}
 		else
 		{

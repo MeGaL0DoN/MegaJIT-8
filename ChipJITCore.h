@@ -460,7 +460,7 @@ private:
 
 			if (condition)
 			{
-				c.emitLabel();
+				c.emitJumpLabel();
 				condition = false;
 			}
 		}
