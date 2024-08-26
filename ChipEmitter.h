@@ -175,8 +175,6 @@ private:
 			else
 				MOV(V_REG(i), byte[rax + i]);
 		}
-
-		if (Quirks::MemoryIncrement) add(I_REG, count + 1);
 	}
 
 	//// Static functions for JIT to call
@@ -688,19 +686,16 @@ public:
 		movzx(ax, r8b);
 		mov(r9b, 100);
 		div(r9b);
-		mov(dl, ah);
 		mov(byte[rcx], al);
 
 		movzx(ax, r8b);
 		mov(r9b, 10);
 		div(r9b);
+		mov(byte[rcx + 2], ah);
+
 		xor_(ah, ah);
 		div(r9b);
 		mov(byte[rcx + 1], ah);
-
-		movzx(ax, dl);
-		div(r9b);
-		mov(byte[rcx + 2], ah);
 	}
 
 	inline void emitFX55(uint8_t regX)
@@ -708,13 +703,16 @@ public:
 		store<true>(regX);
 
 		movzx(ARG1, I_REG);
-		lea(ARG2, ptr[rcx + regX]);
+		lea(ARG2, ptr[ARG1 + regX]);
 		callFunc((size_t)invalidateBlocks);
+
+		if (Quirks::MemoryIncrement) add(I_REG, regX + 1);
 	}
 
 	inline void emitFX65(uint8_t regX)
 	{
 		store<false>(regX);
+		if (Quirks::MemoryIncrement) add(I_REG, regX + 1);
 	}
 
 	inline void emitFX0A(uint8_t regX)
