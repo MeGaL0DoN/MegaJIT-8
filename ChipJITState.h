@@ -31,8 +31,6 @@ struct ChipJITState
 	std::array<JITMapEntry, ChipState::RAM_SIZE> blockMap{};
 	std::vector<JITBlock> blocks{};
 
-	void invalidateBlocks(uint16_t startAddr, uint16_t endAddr);
-
 	inline void reset()
 	{
 		blocks.clear();

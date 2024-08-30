@@ -33,7 +33,7 @@ uint32_t executedInstructions{ 0 };
 bool JITMode{ true };
 bool unlimitedMode{ false };
 
-int CPUfrequency{ 500 };
+int IPF { 9 };
 bool paused{ false };
 
 bool enableRainbow { false };
@@ -68,17 +68,14 @@ std::string toMIPSstring(uint32_t instr)
     return oss.str();
 }
 
+std::array<uint8_t, ChipState::SCRHeight * ChipState::SCRWidth> textureBuf;
+
 void draw()
 {
     const auto& screenBuf = chipCore->getScreenBuffer();
-    std::array<uint8_t, ChipState::SCRHeight* ChipState::SCRWidth> textureBuf{};
-
-    while (s.drawLock.exchange(true)) {}
 
     for (int i = 0; i < ChipState::SCRWidth * ChipState::SCRHeight; i++)
         textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
-
-    s.drawLock.store(false);
 
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCRWidth, ChipState::SCRHeight, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
@@ -393,18 +390,6 @@ void renderImGUI()
                 chipJITCore.setSlowMode(!unlimitedMode);
                 if (startThread) startCPUThread();
             }
-            if (unlimitedMode && JITMode)
-			{
-                ImGui::Spacing();
-
-                if (ImGui::Checkbox("Draw Sync", &s.enableDrawLocking))
-                    clearJITcache();
-
-                ImGui::Spacing();
-
-                if (ImGui::Checkbox("Dont count branched-out instructions", &Quirks::SubtractJITBranches))
-                    clearJITcache();
-			}
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -413,22 +398,28 @@ void renderImGUI()
             if (unlimitedMode)
                 ImGui::Text(instrPerSecondStr.c_str());
             else
-                ImGui::SliderInt("CPU Frequency", &CPUfrequency, 60, 10000);
+                ImGui::SliderInt("IPF", &IPF, 1, 100);
 
             ImGui::EndMenu();
         }
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            ImGui::Checkbox("VFReset", &Quirks::VFReset);
-            ImGui::Checkbox("Shifting", &Quirks::Shifting);
-            ImGui::Checkbox("Jumping", &Quirks::Jumping);
-            ImGui::Checkbox("Clipping", &Quirks::Clipping);
-            ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement);
+            if (ImGui::Checkbox("VFReset", &Quirks::VFReset) && JITMode) clearJITcache();
+            if (ImGui::Checkbox("Shifting", &Quirks::Shifting) && JITMode) clearJITcache();
+            if (ImGui::Checkbox("Jumping", &Quirks::Jumping) && JITMode) clearJITcache();
+            if (ImGui::Checkbox("Clipping", &Quirks::Clipping) && JITMode) clearJITcache();
+            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement) && JITMode) clearJITcache();
 
             ImGui::Spacing();
             ImGui::Separator();
-            if (ImGui::Button("Reset to Default")) Quirks::Reset();
+
+            if (ImGui::Button("Reset to Default"))
+            {
+                Quirks::Reset();
+                if (JITMode) clearJITcache();
+            }
+
             ImGui::EndMenu();
         }
         if (paused)
@@ -616,13 +607,14 @@ int main()
     setBuffers();
 
     std::thread initThread{ ChipCore::initAudio };
-    loadROM("ROMs/chipLogo.ch8");
+    //loadROM("ROMs/chipLogo.ch8");
 
     double lastTime = glfwGetTime();
     double executeTimer{};
     double secondsTimer{};
 
-    double remainderCycles{};
+    std::cout << "screen buffer addr: " << std::hex << (size_t)&s.screenBuffer << std::endl;
+    std::cout << "texture buffer addr: " << std::hex << (size_t)&textureBuf << std::endl;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -644,11 +636,7 @@ int main()
 
                 if (!unlimitedMode)
                 {
-                    double cycles = (CPUfrequency / 60.0) + remainderCycles;
-                    int wholeCycles { static_cast<int>(cycles) };
-                    remainderCycles = cycles - wholeCycles;
-
-                    for (int i = 0; i < wholeCycles; i++)
+                    for (int i = 0; i < IPF; i++)
                         chipCore->execute();
                 }
             }

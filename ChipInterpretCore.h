@@ -225,8 +225,6 @@ private:
 		s.V[0xF] = 0;
 		const bool partialDraw = Xpos > 56;
 
-		while (s.drawLock.exchange(true)) {}
-
 		for (int i = 0; i < height; i++)
 		{
 			uint8_t spriteRow = s.RAM[(s.I + i) & 0xFFF];
@@ -262,7 +260,5 @@ private:
 			screenRow ^= spriteMask;
 			Ypos++;
 		}
-
-		s.drawLock.store(false);
 	}
 };

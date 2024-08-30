@@ -1,7 +1,6 @@
 #pragma once
 #include <array>
-#include <mutex>
-#include <atomic>
+#include <cstdint>
 
 struct ChipState
 {
@@ -25,9 +24,6 @@ struct ChipState
 	uint8_t* inputReg;
 
 	std::array<uint64_t, SCRHeight> screenBuffer{};
-
-	std::atomic<bool> drawLock { false };
-	bool enableDrawLocking { false };
 
 	uint8_t BLOCK_NOT_TAKEN_BRANCHES{ 0 };
 
