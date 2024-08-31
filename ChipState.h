@@ -25,7 +25,7 @@ struct ChipState
 
 	std::array<uint64_t, SCRHeight> screenBuffer{};
 
-	uint8_t BLOCK_NOT_TAKEN_BRANCHES{ 0 };
+	uint64_t BLOCK_NOT_TAKEN_BRANCHES{ 0 };
 
 	void reset();
 };

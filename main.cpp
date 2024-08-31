@@ -28,7 +28,7 @@ ChipCore* chipCore{ &chipJITCore };
 
 std::thread cpuThread;
 std::atomic<bool> CPUThreadRunning{ false };
-uint32_t executedInstructions{ 0 };
+uint64_t executedInstructions{ 0 };
 
 bool JITMode{ true };
 bool unlimitedMode{ false };
@@ -53,7 +53,7 @@ bool fileDialogOpen{ false };
 #endif
 
 const std::filesystem::path defaultPath{ std::filesystem::current_path() };
-constexpr nfdnfilteritem_t ROMfilterItem[2]{ {STR("ROM File"), STR("ch8,benchmark")} };
+constexpr nfdnfilteritem_t ROMfilterItem[2]{ {STR("ROM File"), STR("ch8,bnc")} };
 constexpr nfdnfilteritem_t asmFilterItem[1]{ {STR("x64 Assembly"), STR("txt")} };
 
 std::string instrPerSecondStr{"Instructions per second: 0.000 MIPS"};
@@ -138,7 +138,7 @@ void setBuffers()
 template <bool JIT>
 void cpuThreadExecute()
 {
-    uint32_t threadInstructions{ 0 };
+    uint64_t threadInstructions{ 0 };
 
     while (CPUThreadRunning) [[likely]]
     {
@@ -607,7 +607,7 @@ int main()
     setBuffers();
 
     std::thread initThread{ ChipCore::initAudio };
-    //loadROM("ROMs/chipLogo.ch8");
+    loadROM("ROMs/chipLogo.ch8");
 
     double lastTime = glfwGetTime();
     double executeTimer{};

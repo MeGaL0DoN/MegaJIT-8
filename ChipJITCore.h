@@ -16,7 +16,7 @@ extern ChipJITState JIT;
 class ChipJITCore : public ChipCore
 {
 public:
-	uint16_t execute() override
+	uint64_t execute() override
 	{
 		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
 			return 0;
@@ -79,7 +79,7 @@ private:
 	ChipEmitter c{};
 	static constexpr uint16_t BLOCK_MAX_INSTR = 64;
 
-	uint16_t instructionsPerBlock { 1 };
+	uint64_t instructionsPerBlock { 1 };
 
 	void initialize() override
 	{
@@ -87,7 +87,7 @@ private:
 		clearJITCache();
 	}
 
-	inline uint16_t compileBlock()
+	inline uint64_t compileBlock()
 	{
 		constexpr size_t CACHE_CLEAR_THRESHOLD = static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.8);
 

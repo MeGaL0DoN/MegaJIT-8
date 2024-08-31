@@ -35,7 +35,7 @@ public:
 		return false;
 	}
 
-	virtual uint16_t execute() = 0;
+	virtual uint64_t execute() = 0;
 
 	const std::array<uint64_t, ChipState::SCRHeight>& getScreenBuffer() { return s.screenBuffer; }
 	inline bool awaitingKeyPress() { return s.inputReg != nullptr; }

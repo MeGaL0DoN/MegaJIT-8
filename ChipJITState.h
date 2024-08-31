@@ -3,8 +3,6 @@
 #include <vector>
 #include "ChipState.h"
 
-class ChipEmitter;
-
 struct JITBlock
 {
 	uint16_t startPC;

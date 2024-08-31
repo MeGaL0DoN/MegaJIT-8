@@ -9,7 +9,7 @@ extern ChipState s;
 class ChipInterpretCore : public ChipCore
 {
 public:
-	uint16_t execute() override
+	uint64_t execute() override
 	{
 		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
 			return 0;
