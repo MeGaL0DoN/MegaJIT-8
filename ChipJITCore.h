@@ -77,8 +77,8 @@ private:
 
 private:
 	ChipEmitter c{};
-	static constexpr uint16_t BLOCK_MAX_INSTR = 64;
 
+	static constexpr uint64_t BLOCK_MAX_INSTR = 64;
 	uint64_t instructionsPerBlock { 1 };
 
 	void initialize() override

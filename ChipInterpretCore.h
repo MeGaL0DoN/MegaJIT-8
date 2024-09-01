@@ -178,7 +178,7 @@ public:
 			case 0x0033:
 				s.RAM[s.I & 0xFFF] = regX / 100;
 				s.RAM[(s.I + 1) & 0xFFF] = (regX / 10) % 10;
-				s.RAM[(s.I + 2) & 0xFFF] = (regX % 100) % 10;
+				s.RAM[(s.I + 2) & 0xFFF] = regX % 10;
 				break;
 			case 0x0055:
 				for (int i = 0; i <= (xOperand & 0xF); i++)
