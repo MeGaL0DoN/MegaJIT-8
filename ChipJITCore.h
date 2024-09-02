@@ -10,13 +10,15 @@
 #include "ChipEmitter.h"
 #include "ChipJITState.h"
 
+#include "macros.h"
+
 extern ChipState s;
 extern ChipJITState JIT;
 
 class ChipJITCore : public ChipCore
 {
 public:
-	uint64_t execute() override
+	FORCE_INLINE uint64_t execute() override
 	{
 		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
 			return 0;

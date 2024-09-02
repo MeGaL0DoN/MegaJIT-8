@@ -11,11 +11,10 @@
 #include "ChipJITState.h"
 #include "Quirks.h"
 
+#include "macros.h"
+
 extern ChipState s;
 extern ChipJITState JIT;
-
-static std::default_random_engine rngEng{ std::random_device{}() };
-static std::uniform_int_distribution<> rngDistr{ 0, 255 };
 
 class ChipEmitter : Xbyak::CodeGenerator
 {
@@ -219,13 +218,6 @@ private:
 
 	}
 
-	//// Static functions for JIT to call
-
-	static uint8_t genRandomNum()
-	{
-		return rngDistr(rngEng);
-	}
-
 	static void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
 	{
 		for (auto& block : JIT.blocks)
@@ -234,8 +226,6 @@ private:
 				JIT.blockMap[block.startPC].isValid = false;
 		}
 	}
-
-	/////////////////////////
 
 	inline void resetState()
 	{
@@ -246,6 +236,39 @@ private:
 		flagRegAllocated = false;
 		instructions = 0;
 		blockBranches = 0;
+	}
+
+	bool SSE2Support { false };
+	bool AVXSupport { false };
+
+	inline void checkCPUSupport()
+	{
+		push(rbx);
+		mov(r8, (size_t)&SSE2Support);
+		mov(r9, (size_t)&AVXSupport);
+
+		mov(eax, 1);
+		cpuid();
+
+		test(edx, 1 << 26);
+		jz("end");
+		mov(byte[r8], 1);
+
+		test(ecx, 1 << 28);
+		jz("end");
+
+		mov(ecx, 0);
+		xgetbv();
+		test(eax, 6);
+		jz("end");
+
+		mov(byte[r9], 1);
+
+		L("end");
+		pop(rbx);
+		ret();
+
+		execute(0);
 	}
 
 public:
@@ -279,6 +302,7 @@ public:
 
 	ChipEmitter() : Xbyak::CodeGenerator(MAX_CACHE_SIZE)
 	{
+		checkCPUSupport();
 	}
 
 	void emitPrologue()
@@ -327,17 +351,34 @@ public:
 		resetState();
 	}
 
-	inline uint64_t execute(uint32_t offset) const
+	FORCE_INLINE uint64_t execute(uint32_t offset) const
 	{
 		return reinterpret_cast<uint16_t(*)()>(const_cast<uint8_t*>(getCode()) + offset)();
 	}
 
 	inline void emit00E0()
 	{
-		mov(ARG1, (size_t)s.screenBuffer.data());
-		xor_(ARG2, ARG2);
-		mov(ARG3, sizeof(s.screenBuffer));
-		callFunc((size_t)std::memset);
+		lea(rcx, ptr[rbp + offsetof(ChipState, screenBuffer)]);
+
+		if (AVXSupport)
+		{
+			vxorpd(ymm0, ymm0, ymm0);
+
+			for (int i = 0; i < 32; i += 4)
+				vmovdqu(ptr[rcx + i * 8], ymm0);
+		}	
+		else if (SSE2Support)
+		{
+			pxor(xmm0, xmm0); 
+
+			for (int i = 0; i < 32; i += 2) 
+				movdqu(ptr[rcx + i * 8], xmm0); 
+		}
+		else
+		{
+			for (int i = 0; i < 32; i++)
+				mov(qword[rcx + i * 8], 0);
+		}
 	}
 
 	inline const uint8_t* getCodePtr() const { return getCode(); }
@@ -556,8 +597,7 @@ public:
 		if (regX != 0xF) // small optimization if operand is flag reg.
 			mov(V_REG(regX), cl);
 
-		setc(FLAG_REG);
-		xor_(FLAG_REG, 0x1);
+		setnc(FLAG_REG);
 	}
 
 	inline void emit8XYE(uint8_t regX, uint8_t regY)
@@ -588,8 +628,8 @@ public:
 
 	inline void emitCXNN(uint8_t regX, uint8_t val)
 	{
-		callFunc((size_t)genRandomNum);
-		and_(al, val);
+		rdtsc(); // using cpu timestamp as a random number
+		and_(eax, val);
 		mov(V_REG(regX), al);
 	}
 
@@ -640,7 +680,6 @@ public:
 			{
 				mov(cl, 120);
 				sub(cl, r9b); 
-
 				shl(rax, cl);
 				or_(r10, rax);
 			}
@@ -665,7 +704,6 @@ public:
 		}
 
 		L(loopEnd);
-
 
 
 
@@ -754,7 +792,6 @@ public:
 		and_(rcx, 0xFFF);
 		mov(RAM_PTR(rcx), r8b);
 	}
-
 
 	inline void emitFX55(uint8_t regX)
 	{

@@ -607,7 +607,7 @@ int main()
     setBuffers();
 
     std::thread initThread{ ChipCore::initAudio };
-    loadROM("ROMs/chipLogo.ch8");
+    //loadROM("ROMs/chipLogo.ch8");
 
     double lastTime = glfwGetTime();
     double executeTimer{};

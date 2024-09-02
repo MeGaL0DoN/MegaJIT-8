@@ -16,6 +16,7 @@ add_executable(MegaJIT_8 main.cpp
         main.cpp
         Quirks.h
         resources.h
+        macros.h
         Shader.cpp
         Shader.h
         Test.cpp
@@ -27,8 +28,7 @@ add_executable(MegaJIT_8 main.cpp
         ChipState.cpp
         ChipState.h
         ChipInterpretCore.h
-        ChipJITCore.h
-)
+        ChipJITCore.h)
 
 if(MINGW)
     set_target_properties(

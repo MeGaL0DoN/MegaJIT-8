@@ -181,13 +181,13 @@ public:
 				s.RAM[(s.I + 2) & 0xFFF] = regX % 10;
 				break;
 			case 0x0055:
-				for (int i = 0; i <= (xOperand & 0xF); i++)
+				for (int i = 0; i <= xOperand; i++)
 					s.RAM[(s.I + i) & 0xFFF] = s.V[i];
 
 				if (Quirks::MemoryIncrement) s.I += xOperand + 1;
 				break;
 			case 0x0065:
-				for (int i = 0; i <= (xOperand & 0xF); i++) 
+				for (int i = 0; i <= xOperand; i++) 
 					s.V[i] = s.RAM[(s.I + i) & 0xFFF];
 
 				if (Quirks::MemoryIncrement) s.I += xOperand + 1;
