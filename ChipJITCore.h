@@ -222,7 +222,7 @@ private:
 			case 0xD000:
 				c.VRegUsage[xReg]++; 
 				c.VRegUsage[yReg]++; 
-				c.VRegUsage[0xF]++;
+				c.VRegUsage[0xF] += (opcode & 0x000F); // height
 				c.IRegUsage++;
 				break;
 			case 0xF000:

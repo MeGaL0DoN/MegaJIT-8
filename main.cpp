@@ -607,14 +607,14 @@ int main()
     setBuffers();
 
     std::thread initThread{ ChipCore::initAudio };
-    //loadROM("ROMs/chipLogo.ch8");
+    loadROM("ROMs/chipLogo.ch8");
 
     double lastTime = glfwGetTime();
     double executeTimer{};
     double secondsTimer{};
 
-    std::cout << "screen buffer addr: " << std::hex << (size_t)&s.screenBuffer << std::endl;
-    std::cout << "texture buffer addr: " << std::hex << (size_t)&textureBuf << std::endl;
+   // std::cout << "screen buffer addr: " << std::hex << (size_t)&s.screenBuffer << std::endl;
+    //std::cout << "texture buffer addr: " << std::hex << (size_t)&textureBuf << std::endl;
 
     while (!glfwWindowShouldClose(window))
     {

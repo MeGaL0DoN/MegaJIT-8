@@ -32,18 +32,21 @@ private:
 #define ARG4 rcx
 #endif
 
-#define SP word[rbp + offsetof(ChipState, sp)]
-#define PC word[rbp + offsetof(ChipState, pc)]
-#define STACK_PTR word[rbp + offsetof(ChipState, stack) + (rcx * sizeof(uint16_t))]
-#define KEY(offset) byte[rbp + offsetof(ChipState, keys) + offset]
-#define REG_PTR(num) byte[rbp + offsetof(ChipState, V) + num]
-#define I_REG_PTR word[rbp + offsetof(ChipState, I)]
-#define RAM_PTR(offset) byte[rbp + offsetof(ChipState, RAM) + offset]
+#define BASE r11
+
+#define SP word[BASE + offsetof(ChipState, sp)]
+#define PC word[BASE + offsetof(ChipState, pc)]
+#define STACK_PTR word[BASE + offsetof(ChipState, stack) + (rcx * sizeof(uint16_t))]
+#define KEY(offset) byte[BASE + offsetof(ChipState, keys) + offset]
+#define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
+#define I_REG_PTR word[BASE + offsetof(ChipState, I)]
+#define RAM_PTR(offset) byte[BASE + offsetof(ChipState, RAM) + offset]
+#define BRANCH_CNT_PTR qword[BASE + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]
 
 #ifdef _WIN32
-	static constexpr uint8_t MAX_ALLOC_REGS = 5;
+	static constexpr uint8_t MAX_ALLOC_REGS = 6;
 #else
-	static constexpr uint8_t MAX_ALLOC_REGS = 4;
+	static constexpr uint8_t MAX_ALLOC_REGS = 5;
 #endif
 
 	std::vector<uint8_t> allocatedRegs{};
@@ -58,18 +61,17 @@ private:
 		switch (num)
 		{
 			case 0: return bx;
-			case 1: return r12w;
-			case 2: return r13w;
-			case 3: return r14w;
-			case 4: return di;
+			case 1: return bp;
+			case 2: return r12w;
+			case 3: return r13w;
+			case 4: return r14w;
+			case 5: return di;
 		}
 	}
 
-#define FLAG_REG bl
-
 	const Xbyak::Reg8* Vreg{ nullptr };
 
-	inline bool GET_VREG(uint8_t num)
+	inline bool GET_VREG(uint8_t num) 
 	{
 		auto pos = std::find(allocatedRegs.begin(), allocatedRegs.end(), num);
 
@@ -78,10 +80,11 @@ private:
 			switch (std::distance(allocatedRegs.begin(), pos))
 			{
 				case 0: Vreg = &bl; break;
-				case 1: Vreg = &r12b; break;
-				case 2: Vreg = &r13b; break;
-				case 3: Vreg = &r14b; break;
-				case 4: Vreg = &sil; break;
+				case 1: Vreg = &bpl; break;
+				case 2: Vreg = &r12b; break;
+				case 3: Vreg = &r13b; break;
+				case 4: Vreg = &r14b; break;
+				case 5: Vreg = &sil; break;
 			}
 
 			return true;
@@ -92,6 +95,7 @@ private:
 
 #define V_REG(num) (GET_VREG(num) ? (const Xbyak::Operand&)*Vreg : (const Xbyak::Operand&)REG_PTR(num))
 #define I_REG (IregAllocated ? (const Xbyak::Operand&)r15w : (const Xbyak::Operand&)I_REG_PTR)
+#define FLAG_REG (flagRegAllocated ? (const Xbyak::Operand&)bl : (const Xbyak::Operand&)REG_PTR(0xF))
 
 	template <typename Op>
 	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
@@ -281,7 +285,7 @@ public:
 
 	void allocateRegs()
 	{
-		if (VRegUsage[0xF] > 0)
+		if (VRegUsage[0xF] >= 3)
 		{
 			allocatedRegs.push_back(0xF);
 			flagRegAllocated = true;
@@ -307,8 +311,7 @@ public:
 
 	void emitPrologue()
 	{
-		push(rbp);
-		mov(rbp, (size_t)&s);
+		mov(BASE, (size_t)&s);
 
 		if (IregAllocated)
 		{
@@ -335,8 +338,8 @@ public:
 
 		if (blockBranches > 0)
 		{
-			add(rax, qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
-			mov(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)], 0);
+			add(rax, BRANCH_CNT_PTR);
+			mov(BRANCH_CNT_PTR, 0);
 		}
 
 		if (IregAllocated)
@@ -345,7 +348,6 @@ public:
 			pop(I_FULL_REG);
 		}
 
-		pop(rbp);
 		ret();
 
 		resetState();
@@ -358,7 +360,7 @@ public:
 
 	inline void emit00E0()
 	{
-		lea(rcx, ptr[rbp + offsetof(ChipState, screenBuffer)]);
+		lea(rcx, ptr[BASE + offsetof(ChipState, screenBuffer)]);
 
 		if (AVXSupport)
 		{
@@ -366,13 +368,13 @@ public:
 
 			for (int i = 0; i < 32; i += 4)
 				vmovdqu(ptr[rcx + i * 8], ymm0);
-		}	
+		}
 		else if (SSE2Support)
 		{
-			pxor(xmm0, xmm0); 
+			pxor(xmm0, xmm0);
 
-			for (int i = 0; i < 32; i += 2) 
-				movdqu(ptr[rcx + i * 8], xmm0); 
+			for (int i = 0; i < 32; i += 2)
+				movdqu(ptr[rcx + i * 8], xmm0);
 		}
 		else
 		{
@@ -427,7 +429,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -447,7 +449,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -467,7 +469,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -487,7 +489,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -508,7 +510,7 @@ public:
 		{
 			test(cl, cl);
 			jnz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -527,7 +529,7 @@ public:
 		{
 			test(cl, cl);
 			jz("@f", T_NEAR);
-			inc(qword[rbp + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]);
+			inc(BRANCH_CNT_PTR);
 		}
 		else
 		{
@@ -554,17 +556,17 @@ public:
 	inline void emit8XY1(uint8_t regX, uint8_t regY)
 	{
 		OR(V_REG(regX), V_REG(regY));
-		if (Quirks::VFReset) xor_(FLAG_REG, FLAG_REG);
+		if (Quirks::VFReset) mov(FLAG_REG, 0);
 	}
 	inline void emit8XY2(uint8_t regX, uint8_t regY)
 	{
 		AND(V_REG(regX), V_REG(regY));
-		if (Quirks::VFReset) xor_(FLAG_REG, FLAG_REG);
+		if (Quirks::VFReset) mov(FLAG_REG, 0);
 	}
 	inline void emit8XY3(uint8_t regX, uint8_t regY)
 	{
 		XOR(V_REG(regX), V_REG(regY));
-		if (Quirks::VFReset) xor_(FLAG_REG, FLAG_REG);
+		if (Quirks::VFReset) mov(FLAG_REG, 0);
 	}
 	inline void emit8XY4(uint8_t regX, uint8_t regY)
 	{
@@ -584,7 +586,7 @@ public:
 			and_(FLAG_REG, 0x1);
 		else
 		{
-			mov(FLAG_REG, V_REG(regX));
+			MOV(FLAG_REG, V_REG(regX));
 			and_(FLAG_REG, 0x1);
 			shr(V_REG(regX), 1);
 		}
@@ -608,7 +610,7 @@ public:
 			shr(FLAG_REG, 7);
 		else
 		{
-			mov(FLAG_REG, V_REG(regX));
+			MOV(FLAG_REG, V_REG(regX));
 			shr(FLAG_REG, 7);
 			shl(V_REG(regX), 1);
 		}
@@ -635,7 +637,7 @@ public:
 
 	inline void emitDXYN(uint8_t regX, uint8_t regY, uint8_t height)
 	{
-		xor_(FLAG_REG, FLAG_REG);
+		mov(FLAG_REG, 0);
 		if (height == 0) return;
 
 		Xbyak::Label loopEnd;
@@ -693,20 +695,19 @@ public:
 
 			L(drawXoring);
 
-			lea(r11, ptr[rbp + offsetof(ChipState, screenBuffer) + (r8 * sizeof(uint64_t))]);
+			lea(rcx, ptr[BASE + offsetof(ChipState, screenBuffer) + (r8 * sizeof(uint64_t))]);
 
-			test(qword[r11], r10);
+			test(qword[rcx], r10);
 			setnz(al);
 			or_(FLAG_REG, al);
-			xor_(qword[r11], r10);
+			xor_(qword[rcx], r10);
 
 			inc(r8b);
 		}
 
 		L(loopEnd);
 
-
-
+		//push(BASE);
 		//movzx(ARG1, V_REG(regX));
 		//movzx(ARG2, V_REG(regY));
 		//mov(ARG3, height);
@@ -722,20 +723,21 @@ public:
 		//}
 
 		//if (flagRegAllocated) mov(FLAG_REG, REG_PTR(0xF));
+		//pop(BASE);
 	}
 
 	inline void emitFX07(uint8_t regX)
 	{
-		MOV(V_REG(regX), byte[rbp + offsetof(ChipState, delay_timer)]);
+		MOV(V_REG(regX), byte[BASE + offsetof(ChipState, delay_timer)]);
 	}
 
 	inline void emitFX15(uint8_t regX)
 	{
-		MOV(byte[rbp + offsetof(ChipState, delay_timer)], V_REG(regX));
+		MOV(byte[BASE + offsetof(ChipState, delay_timer)], V_REG(regX));
 	}
 	inline void emitFX18(uint8_t regX)
 	{
-		MOV(byte[rbp + offsetof(ChipState, sound_timer)], V_REG(regX));
+		MOV(byte[BASE + offsetof(ChipState, sound_timer)], V_REG(regX));
 	}
 
 	inline void emitFX1E(uint8_t regX)
@@ -799,9 +801,17 @@ public:
 
 		movzx(ARG1, I_REG);
 		lea(ARG2, ptr[ARG1 + regX]);
+
+		if (Quirks::MemoryIncrement && !IregAllocated)
+			push(BASE);
+
 		callFunc((size_t)invalidateBlocks);
 
-		if (Quirks::MemoryIncrement) add(I_REG, regX + 1);
+		if (Quirks::MemoryIncrement)
+		{
+			if (!IregAllocated) pop(BASE);
+			add(I_REG, regX + 1);
+		}
 	}
 
 	inline void emitFX65(uint8_t regX)
@@ -813,6 +823,6 @@ public:
 	inline void emitFX0A(uint8_t regX)
 	{
 		mov(rax, (size_t)(&s.V[regX]));
-		mov(qword[rbp + offsetof(ChipState, inputReg)], rax);
+		mov(qword[BASE + offsetof(ChipState, inputReg)], rax);
 	}
 };
