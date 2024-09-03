@@ -176,6 +176,7 @@ private:
 			case 0xE000:
 				c.VRegUsage[xReg]++;
 				if (isFlowNext(pc)) return;
+				c.incrementBranches();
 				break;
 			case 0x6000:
 			case 0x7000:
@@ -212,6 +213,7 @@ private:
 				c.VRegUsage[xReg]++;
 				c.VRegUsage[yReg]++;
 				if (isFlowNext(pc)) return;
+				c.incrementBranches();
 				break;
 			case 0xA000:
 				c.IRegUsage++;
@@ -223,7 +225,7 @@ private:
 				c.VRegUsage[xReg]++; 
 				c.VRegUsage[yReg]++; 
 				c.VRegUsage[0xF] += (opcode & 0x000F); // height
-				c.IRegUsage++;
+				c.IRegUsage += (opcode & 0x000F);
 				break;
 			case 0xF000:
 				switch (opcode & 0x00FF)

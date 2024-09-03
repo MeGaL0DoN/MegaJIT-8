@@ -33,6 +33,7 @@ private:
 #endif
 
 #define BASE r11
+#define BRANCH_SKIP_REG r10
 
 #define SP word[BASE + offsetof(ChipState, sp)]
 #define PC word[BASE + offsetof(ChipState, pc)]
@@ -41,7 +42,6 @@ private:
 #define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
 #define I_REG_PTR word[BASE + offsetof(ChipState, I)]
 #define RAM_PTR(offset) byte[BASE + offsetof(ChipState, RAM) + offset]
-#define BRANCH_CNT_PTR qword[BASE + offsetof(ChipState, BLOCK_NOT_TAKEN_BRANCHES)]
 
 #ifdef _WIN32
 	static constexpr uint8_t MAX_ALLOC_REGS = 6;
@@ -280,6 +280,7 @@ public:
 
 	std::array<uint8_t, 16> VRegUsage{};
 	uint8_t IRegUsage{ 0 };
+	bool earlyStoreReturn { false };
 
 	uint64_t instructions { 0 };
 
@@ -304,6 +305,8 @@ public:
 			IregAllocated = true;
 	}
 
+	inline void incrementBranches() { blockBranches++; }
+
 	ChipEmitter() : Xbyak::CodeGenerator(MAX_CACHE_SIZE)
 	{
 		checkCPUSupport();
@@ -312,6 +315,9 @@ public:
 	void emitPrologue()
 	{
 		mov(BASE, (size_t)&s);
+
+		if (blockBranches > 0)
+			xor_(BRANCH_SKIP_REG, BRANCH_SKIP_REG);
 
 		if (IregAllocated)
 		{
@@ -334,13 +340,10 @@ public:
 			pop(V_FULL_REG(i));
 		}
 
-		mov(rax, instructions - blockBranches);
-
 		if (blockBranches > 0)
-		{
-			add(rax, BRANCH_CNT_PTR);
-			mov(BRANCH_CNT_PTR, 0);
-		}
+			lea(rax, ptr[BRANCH_SKIP_REG + instructions - blockBranches]);
+		else
+			mov(rax, instructions);
 
 		if (IregAllocated)
 		{
@@ -391,7 +394,6 @@ public:
 	void emitJumpLabel()
 	{		
 		L("@@");
-		blockBranches++;
 	}
 
 	inline void emit00EE()
@@ -429,7 +431,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -449,7 +451,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -469,7 +471,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -489,7 +491,7 @@ public:
 		if constexpr (jumpLabel)
 		{
 			jnz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -510,7 +512,7 @@ public:
 		{
 			test(cl, cl);
 			jnz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -529,7 +531,7 @@ public:
 		{
 			test(cl, cl);
 			jz("@f", T_NEAR);
-			inc(BRANCH_CNT_PTR);
+			inc(BRANCH_SKIP_REG);
 		}
 		else
 		{
@@ -648,14 +650,16 @@ public:
 		mov(r9b, V_REG(regX));
 		and_(r9, (ChipState::SCRWidth - 1));
 
-		movzx((height == 1 ? rax : rdx), I_REG);
-
 		for (int i = 0; i < height; i++)
 		{
 			Xbyak::Label drawXoring, fullDraw;
 
-			if (height > 1)
-				lea(rax, ptr[rdx + i]);
+			if (IregAllocated) lea(rax, ptr[I_FULL_REG + i]);
+			else
+			{
+				movzx(rax, I_REG_PTR);
+				if (i > 0) lea(rax, ptr[rax + i]);
+			}
 
 			and_(rax, 0xFFF);
 			movzx(rax, RAM_PTR(rax));
@@ -671,19 +675,19 @@ public:
 					and_(r8b, (ChipState::SCRHeight - 1));
 			}
 
-			mov(r10, rax);
+			mov(rdx, rax);
 			cmp(r9b, 56);
 			jbe(fullDraw); 
 
 			lea(rcx, ptr[r9 - 56]);
-			shr(r10, cl);
+			shr(rdx, cl);
 
 			if (!Quirks::Clipping)
 			{
 				mov(cl, 120);
 				sub(cl, r9b); 
 				shl(rax, cl);
-				or_(r10, rax);
+				or_(rdx, rax);
 			}
 
 			jmp(drawXoring);
@@ -691,21 +695,22 @@ public:
 
 			mov(cl, 56);
 			sub(cl, r9b);
-			shl(r10, cl);
+			shl(rdx, cl);
 
 			L(drawXoring);
 
 			lea(rcx, ptr[BASE + offsetof(ChipState, screenBuffer) + (r8 * sizeof(uint64_t))]);
 
-			test(qword[rcx], r10);
+			test(qword[rcx], rdx);
 			setnz(al);
 			or_(FLAG_REG, al);
-			xor_(qword[rcx], r10);
+			xor_(qword[rcx], rdx);
 
 			inc(r8b);
 		}
 
 		L(loopEnd);
+
 
 		//push(BASE);
 		//movzx(ARG1, V_REG(regX));
@@ -718,12 +723,11 @@ public:
 		//}
 		//else
 		//{
-
 		//	callFunc((size_t)drawSprite<false>);
 		//}
 
-		//if (flagRegAllocated) mov(FLAG_REG, REG_PTR(0xF));
 		//pop(BASE);
+		//if (flagRegAllocated) mov(FLAG_REG, REG_PTR(0xF));
 	}
 
 	inline void emitFX07(uint8_t regX)
@@ -774,9 +778,9 @@ public:
 		sub(r9d, r8d);
 		neg(r9d);
 
-		lea(r10, ptr[rcx + 2]);
-		and_(r10, 0xFFF);
-		mov(RAM_PTR(r10), r9b);
+		lea(rax, ptr[rcx + 2]);
+		and_(rax, 0xFFF);
+		mov(RAM_PTR(rax), r9b);
 
 		mov(r9d, edx);
 		imul(edx, edx, 205);
@@ -784,9 +788,9 @@ public:
 		imul(edx, edx, 10);
 		sub(r9d, edx);
 
-		lea(r10, ptr[rcx + 1]);
-		and_(r10, 0xFFF);
-		mov(RAM_PTR(r10), r9b);
+		lea(rax, ptr[rcx + 1]);
+		and_(rax, 0xFFF);
+		mov(RAM_PTR(rax), r9b);
 
 		imul(r8d, r8d, 41);
 		shr(r8d, 12);
@@ -802,16 +806,14 @@ public:
 		movzx(ARG1, I_REG);
 		lea(ARG2, ptr[ARG1 + regX]);
 
-		if (Quirks::MemoryIncrement && !IregAllocated)
-			push(BASE);
-
+		push(BASE);
+		if (blockBranches > 0) push(BRANCH_SKIP_REG);
 		callFunc((size_t)invalidateBlocks);
+		if (blockBranches > 0) pop(BRANCH_SKIP_REG);
+		pop(BASE);
 
 		if (Quirks::MemoryIncrement)
-		{
-			if (!IregAllocated) pop(BASE);
 			add(I_REG, regX + 1);
-		}
 	}
 
 	inline void emitFX65(uint8_t regX)
@@ -822,7 +824,7 @@ public:
 
 	inline void emitFX0A(uint8_t regX)
 	{
-		mov(rax, (size_t)(&s.V[regX]));
+		lea(rax, REG_PTR(regX));
 		mov(qword[BASE + offsetof(ChipState, inputReg)], rax);
 	}
 };
