@@ -16,10 +16,10 @@ Keyboard layout is:
 | A | S | D | F |
 | Z | X | C | V |
 
-Under CPU menu tab, it is possible to switch between interpreter and JIT while running the ROM. In JIT mode, disassembly containing the compiled code can be exported. Unlimited mode checkbox is used for benchmarking. When it is enabled, Emulator works on maximum speed, and number of millions of instructions per second is displayed.
+Under CPU menu tab, you can switch between interpreter and JIT while running the ROM. In JIT mode, disassembly containing the compiled code can be exported. Unlimited mode checkbox is used for benchmarking. When it is enabled, emulator runs on maximum speed, and number of millions of instructions per second is displayed.
 
-### Demo - 820 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
-https://github.com/user-attachments/assets/c9e67ff4-01ac-483e-a059-5966ffb296a0
+### Demo - ⚡1000 MIPS in 1dcell.benchmark (Ryzen 5 7530u Laptop)
+https://github.com/user-attachments/assets/86b2b465-6a9b-4fab-a9c2-2f0163e54479
 
 
 ## License
