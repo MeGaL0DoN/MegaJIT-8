@@ -5,7 +5,9 @@
 #include <cstring>
 #include <algorithm>
 #include <numeric>
+
 #include <xbyak/xbyak.h>
+#include <xbyak/xbyak_util.h>
 
 #include "ChipState.h"
 #include "ChipJITState.h"
@@ -66,6 +68,7 @@ private:
 			case 3: return r13w;
 			case 4: return r14w;
 			case 5: return di;
+			default: UNREACHABLE()
 		}
 	}
 
@@ -194,37 +197,17 @@ private:
 		blockBranches = 0;
 	}
 
+	Xbyak::util::Cpu cpuCaps;
+
 	bool SSE2Support { false };
 	bool AVXSupport { false };
 
 	inline void checkCPUSupport()
 	{
-		push(rbx);
-		mov(r8, (size_t)&SSE2Support);
-		mov(r9, (size_t)&AVXSupport);
+		cpuCaps = Xbyak::util::Cpu();
 
-		mov(eax, 1);
-		cpuid();
-
-		test(edx, 1 << 26);
-		jz("end");
-		mov(byte[r8], 1);
-
-		test(ecx, 1 << 28);
-		jz("end");
-
-		mov(ecx, 0);
-		xgetbv();
-		test(eax, 6);
-		jz("end");
-
-		mov(byte[r9], 1);
-
-		L("end");
-		pop(rbx);
-		ret();
-
-		execute(0);
+		AVXSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
+		SSE2Support = cpuCaps.has(Xbyak::util::Cpu::tSSE2);
 	}
 
 public:
@@ -322,6 +305,8 @@ public:
 
 			for (int i = 0; i < 32; i += 4)
 				vmovdqu(ptr[rcx + i * 8], ymm0);
+
+			vzeroupper();
 		}
 		else if (SSE2Support)
 		{

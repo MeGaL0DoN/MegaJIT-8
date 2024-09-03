@@ -405,7 +405,7 @@ void renderImGUI()
             ImGui::Spacing();
 
             if (unlimitedMode)
-                ImGui::Text(instrPerSecondStr.c_str());
+                ImGui::Text("%s", instrPerSecondStr.c_str());
             else
                 ImGui::SliderInt("IPF", &IPF, 1, 100);
 
