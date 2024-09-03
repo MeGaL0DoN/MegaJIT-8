@@ -174,54 +174,6 @@ private:
 		}
 	}
 
-	// to remove
-	template <bool clipping>
-	static void drawSprite(uint8_t regX, uint8_t regY, uint8_t height)
-	{
-		uint8_t Ypos = regY % ChipState::SCRHeight;
-		const uint8_t Xpos = regX % ChipState::SCRWidth;
-
-		s.V[0xF] = 0;
-		const bool partialDraw = Xpos > 56;
-
-		for (int i = 0; i < height; i++)
-		{
-			uint8_t spriteRow = s.RAM[(s.I + i) & 0xFFF];
-
-			if constexpr (clipping)
-			{
-				if (Ypos >= ChipState::SCRHeight)
-					break;
-			}
-			else
-				Ypos %= ChipState::SCRHeight;
-
-			uint64_t spriteMask;
-
-			if (partialDraw)
-			{
-				uint64_t leftPart = static_cast<uint64_t>(spriteRow) >> (Xpos - 56);
-
-				if constexpr (clipping)
-					spriteMask = leftPart;
-				else
-				{
-					uint64_t rightPart = static_cast<uint64_t>(spriteRow) << (64 - (Xpos - 56));
-					spriteMask = leftPart | rightPart;
-				}
-			}
-			else
-				spriteMask = static_cast<uint64_t>(spriteRow) << (63 - Xpos - 7);
-
-			uint64_t& screenRow = s.screenBuffer[Ypos];
-			s.V[0xF] |= ((screenRow & spriteMask) != 0);
-
-			screenRow ^= spriteMask;
-			Ypos++;
-		}
-
-	}
-
 	static void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
 	{
 		for (auto& block : JIT.blocks)
@@ -276,11 +228,10 @@ private:
 	}
 
 public:
-	static constexpr uint32_t MAX_CACHE_SIZE = 131072;
+	static constexpr uint32_t MAX_CACHE_SIZE = 262144;
 
 	std::array<uint8_t, 16> VRegUsage{};
 	uint8_t IRegUsage{ 0 };
-	bool earlyStoreReturn { false };
 
 	uint64_t instructions { 0 };
 
@@ -639,8 +590,11 @@ public:
 
 	inline void emitDXYN(uint8_t regX, uint8_t regY, uint8_t height)
 	{
-		mov(FLAG_REG, 0);
-		if (height == 0) return;
+		if (height == 0)
+		{
+			mov(FLAG_REG, 0);
+			return;
+		}
 
 		Xbyak::Label loopEnd;
 
@@ -649,6 +603,8 @@ public:
 
 		mov(r9b, V_REG(regX));
 		and_(r9, (ChipState::SCRWidth - 1));
+
+		mov(FLAG_REG, 0);
 
 		for (int i = 0; i < height; i++)
 		{
@@ -710,24 +666,6 @@ public:
 		}
 
 		L(loopEnd);
-
-
-		//push(BASE);
-		//movzx(ARG1, V_REG(regX));
-		//movzx(ARG2, V_REG(regY));
-		//mov(ARG3, height);
-
-		//if (Quirks::Clipping)
-		//{
-		//	callFunc((size_t)drawSprite<true>);
-		//}
-		//else
-		//{
-		//	callFunc((size_t)drawSprite<false>);
-		//}
-
-		//pop(BASE);
-		//if (flagRegAllocated) mov(FLAG_REG, REG_PTR(0xF));
 	}
 
 	inline void emitFX07(uint8_t regX)
@@ -824,7 +762,27 @@ public:
 
 	inline void emitFX0A(uint8_t regX)
 	{
+		Xbyak::Label firstCall, inputReleased, end, decrPC;
+
+		cmp(byte[BASE + offsetof(ChipState, firstFX0ACall)], 1);
+		jz(firstCall);
+
+		cmp(qword[BASE + offsetof(ChipState, inputReg)], 0);
+		jz(inputReleased);
+		jmp(decrPC);
+
+		L(firstCall);
 		lea(rax, REG_PTR(regX));
 		mov(qword[BASE + offsetof(ChipState, inputReg)], rax);
+		mov(byte[BASE + offsetof(ChipState, firstFX0ACall)], 0);
+
+		L(decrPC);
+		sub(PC, 2);
+		jmp(end);
+
+		L(inputReleased);
+		mov(byte[BASE + offsetof(ChipState, firstFX0ACall)], 1);
+
+		L(end);
 	}
 };

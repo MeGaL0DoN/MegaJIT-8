@@ -22,6 +22,7 @@ struct ChipState
 
 	std::array<uint8_t, 16> keys{};
 	uint8_t* inputReg{};
+	bool firstFX0ACall { true };
 
 	std::array<uint64_t, SCRHeight> screenBuffer{};
 

@@ -1,4 +1,5 @@
 #pragma once
+
 namespace Quirks
 {
 	static bool VFReset { true };

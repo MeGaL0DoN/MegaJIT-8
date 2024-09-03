@@ -30,7 +30,13 @@ add_executable(MegaJIT_8 main.cpp
         ChipInterpretCore.h
         ChipJITCore.h)
 
-if(MINGW)
+if (MSVC)
+    set_target_properties(
+    MegaJIT_8 PROPERTIES
+            LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+            LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
+)
+elseif(MINGW)
     set_target_properties(
             MegaJIT_8 PROPERTIES
             LINK_FLAGS_RELEASE "-Wl,-subsystem,windows -s"

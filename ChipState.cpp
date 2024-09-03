@@ -28,6 +28,8 @@ void ChipState::reset()
 	sp = 0;
 	delay_timer = 0;
 	sound_timer = 0;
+	inputReg = nullptr;
+	firstFX0ACall = true;
 
 	std::memset(V.data(), 0, sizeof(V));
 	std::memset(RAM.data(), 0, sizeof(RAM));
@@ -35,7 +37,6 @@ void ChipState::reset()
 
 	std::memset(screenBuffer.data(), 0, sizeof(screenBuffer));
 	std::memset(keys.data(), 0, sizeof(keys));
-	inputReg = nullptr;
 }
 
 ChipState s{};

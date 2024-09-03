@@ -145,7 +145,10 @@ void cpuThreadExecute()
         if constexpr (JIT)
             threadInstructions += chipJITCore.execute();
         else
-            threadInstructions += chipInterpretCore.execute();
+        {
+            chipInterpretCore.execute();
+            threadInstructions++;
+        }
     }
 
     executedInstructions = threadInstructions;
@@ -372,6 +375,9 @@ void renderImGUI()
 
             ImGui::SeparatorText("Performance");
 
+            if (!chipCore->isRomLoaded())
+                ImGui::BeginDisabled();
+
             if (ImGui::Checkbox("Unlimited Mode", &unlimitedMode))
             {
                 bool startThread{ false };
@@ -390,6 +396,9 @@ void renderImGUI()
                 chipJITCore.setSlowMode(!unlimitedMode);
                 if (startThread) startCPUThread();
             }
+
+            if (!chipCore->isRomLoaded())
+                ImGui::EndDisabled();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -613,9 +622,6 @@ int main()
     double executeTimer{};
     double secondsTimer{};
 
-   // std::cout << "screen buffer addr: " << std::hex << (size_t)&s.screenBuffer << std::endl;
-    //std::cout << "texture buffer addr: " << std::hex << (size_t)&textureBuf << std::endl;
-
     while (!glfwWindowShouldClose(window))
     {
         double currentTime = glfwGetTime();
@@ -630,14 +636,19 @@ int main()
         {
             executeTimer -= (1.0 / 60);
 
-            if (!paused)
+            if (!paused && chipCore->isRomLoaded())
             {
                 chipCore->updateTimers();
 
                 if (!unlimitedMode)
                 {
                     for (int i = 0; i < IPF; i++)
-                        chipCore->execute();
+                    {
+                        if (JITMode)
+							chipJITCore.execute();
+						else
+							chipInterpretCore.execute();			
+                    }
                 }
             }
         }

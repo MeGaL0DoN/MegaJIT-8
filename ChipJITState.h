@@ -5,11 +5,11 @@
 
 struct JITBlock
 {
-	uint16_t startPC;
-	uint16_t endPC {};
+	uint16_t startPC{};
+	uint16_t endPC{};
 
-	uint16_t cacheOffset{};
-	uint16_t cacheSize{};
+	uint32_t cacheSize{};
+	uint32_t cacheOffset{};
 
 	JITBlock(uint16_t startPC) : startPC(startPC) 
 	{

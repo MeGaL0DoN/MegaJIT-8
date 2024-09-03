@@ -18,11 +18,8 @@ extern ChipJITState JIT;
 class ChipJITCore : public ChipCore
 {
 public:
-	FORCE_INLINE uint64_t execute() override
+	FORCE_INLINE uint64_t execute()
 	{
-		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
-			return 0;
-
 		auto map = JIT.blockMap[s.pc];
 
 		if (!map.isValid) [[unlikely]]
@@ -91,12 +88,10 @@ private:
 
 	inline uint64_t compileBlock()
 	{
-		constexpr size_t CACHE_CLEAR_THRESHOLD = static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.8);
+		constexpr size_t CACHE_CLEAR_THRESHOLD = static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.9);
 
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
-		{
 			clearJITCache();
-		}
 
 		auto& map = JIT.blockMap[s.pc];
 		map.isValid = true;
@@ -108,14 +103,14 @@ private:
 		}
 
 		auto& block = JIT.blocks[map.block];
-		block.cacheOffset = c.getCodeSize();
+		block.cacheOffset = static_cast<uint32_t>(c.getCodeSize());
 
 		analyzeBlock();
 		emitBlock();
 		c.emitEpilogue();
 
 		block.endPC = s.pc;
-		block.cacheSize = c.getCodeSize() - block.cacheOffset;
+		block.cacheSize = static_cast<uint32_t>(c.getCodeSize()) - block.cacheOffset;
 
 		return c.execute(block.cacheOffset);
 	}

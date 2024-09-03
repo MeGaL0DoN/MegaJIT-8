@@ -9,11 +9,8 @@ extern ChipState s;
 class ChipInterpretCore : public ChipCore
 {
 public:
-	uint64_t execute() override
+	void execute()
 	{
-		if (!romLoaded || awaitingKeyPress()) [[unlikely]]
-			return 0;
-
 		const uint16_t opcode = (s.RAM[s.pc] << 8) | s.RAM[s.pc + 1];
 		s.pc += 2;
 
@@ -161,7 +158,18 @@ public:
 				regX = s.delay_timer;
 				break;
 			case 0x000A: 
-				s.inputReg = &regX;
+				if (s.firstFX0ACall)
+				{
+					s.inputReg = &regX;
+					s.firstFX0ACall = false;
+				}
+				else if (s.inputReg == nullptr)
+				{
+					s.firstFX0ACall = true;
+					break;
+				}
+
+				s.pc -= 2;
 				break;
 			case 0x001E:
 				s.I += regX;
@@ -195,8 +203,6 @@ public:
 			}
 			break;
 		}
-
-		return 1;
 
 		#undef memoryAddr
 		#undef doubleNibble
