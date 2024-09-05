@@ -18,7 +18,7 @@ struct ChipState
 	uint8_t sound_timer{};
 
 	std::array<uint16_t, 16> stack{};
-	uint16_t sp;
+	uint16_t sp{};
 
 	std::array<uint8_t, 16> keys{};
 	uint8_t* inputReg{};

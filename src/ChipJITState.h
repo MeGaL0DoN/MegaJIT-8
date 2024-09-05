@@ -24,8 +24,6 @@ struct JITMapEntry
 
 struct ChipJITState
 {
-	static constexpr uint16_t BLOCK_SIZE = 4096;
-
 	std::array<JITMapEntry, ChipState::RAM_SIZE> blockMap{};
 	std::vector<JITBlock> blocks{};
 

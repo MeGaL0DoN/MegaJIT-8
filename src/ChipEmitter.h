@@ -1,6 +1,5 @@
 #pragma once
 
-#include <random>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -12,7 +11,6 @@
 #include "ChipState.h"
 #include "ChipJITState.h"
 #include "Quirks.h"
-
 #include "macros.h"
 
 extern ChipState s;
@@ -343,7 +341,7 @@ public:
 
 	inline void emit1NNN(uint16_t addr)
 	{
-		mov(PC, addr);
+		mov(PC, addr & 0xFFF);
 	}
 
 	inline void emit2NNN(uint16_t addr)
@@ -352,7 +350,7 @@ public:
 		and_(rcx, 0xF);
 		mov(ax, PC);
 		mov(STACK_PTR, ax);
-		mov(PC, addr);
+		mov(PC, addr & 0xFFF);
 		inc(SP);
 	}
 
@@ -564,6 +562,7 @@ public:
 		mov(PC, val);
 		movzx(cx, Quirks::Jumping ? V_REG(regX) : V_REG(0));
 		add(PC, cx);
+		and_(PC, 0xFFF);
 	}
 
 	inline void emitCXNN(uint8_t regX, uint8_t val)
@@ -675,16 +674,10 @@ public:
 
 	inline void emitFX29(uint8_t regX)
 	{
-		mov(al, V_REG(regX));
-		and_(al, 0xF);
-		imul(al, al, 0x5);
-
-		if (IregAllocated) movzx(I_FULL_REG, al);
-		else
-		{
-			movzx(ax, al);
-			mov(I_REG_PTR, ax);
-		}
+		movzx(rcx, V_REG(regX));
+		and_(rcx, 0xF);
+		lea(rcx, ptr[rcx + (rcx * 4)]);
+		mov(I_REG, cx);
 	}
 
 	inline void emitFX33(uint8_t regX)

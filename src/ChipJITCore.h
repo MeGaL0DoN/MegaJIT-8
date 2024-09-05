@@ -63,7 +63,7 @@ public:
 
 				ud_set_input_buffer(&ud_obj, c.getCodePtr() + block.cacheOffset, block.cacheSize);
 
-				while (ud_disassemble(&ud_obj)) 
+				while (ud_disassemble(&ud_obj))
 					outFile << ud_insn_asm(&ud_obj) << "\n";
 
 				outFile << "\n";
@@ -93,6 +93,7 @@ private:
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
 
+		s.pc &= 0xFFF;
 		auto& map = JIT.blockMap[s.pc];
 		map.isValid = true;
 
@@ -109,8 +110,9 @@ private:
 		emitBlock();
 		c.emitEpilogue();
 
+		s.pc &= 0xFFF;
 		block.endPC = s.pc;
-		block.cacheSize = static_cast<uint32_t>(c.getCodeSize()) - block.cacheOffset;
+		block.cacheSize = static_cast<uint32_t>(c.getCodeSize() - block.cacheOffset);
 
 		return c.execute(block.cacheOffset);
 	}
@@ -146,7 +148,7 @@ private:
 
 		for (int i = 0; i < instructionsPerBlock; i++)
 		{
-			const uint16_t opcode = (s.RAM[pc] << 8) | s.RAM[pc + 1];
+			const uint16_t opcode = (s.RAM[pc & 0xFFF] << 8) | s.RAM[(pc + 1) & 0xFFF];
 			const uint8_t xReg = ((opcode & 0x0F00) >> 8) & 0xF;
 			const uint8_t yReg = ((opcode & 0x00F0) >> 4) & 0xF;
 
@@ -262,7 +264,7 @@ private:
 
 		while (c.instructions < instructionsPerBlock || condition)
 		{
-			const uint16_t opcode = (s.RAM[s.pc] << 8) | s.RAM[s.pc + 1];
+			const uint16_t opcode = (s.RAM[s.pc & 0xFFF] << 8) | s.RAM[(s.pc + 1) & 0xFFF];
 
 			const uint8_t xOperand = ((opcode & 0x0F00) >> 8) & 0xF;
 			const uint8_t yOperand = ((opcode & 0x00F0) >> 4) & 0xF;

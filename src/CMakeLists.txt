@@ -19,7 +19,6 @@ add_executable(MegaJIT_8 main.cpp
         macros.h
         Shader.cpp
         Shader.h
-        Test.cpp
         ChipCore.cpp
         ChipCore.h
         ChipEmitter.h
@@ -48,7 +47,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     )
 endif()
 
-file(COPY ROMs DESTINATION ${CMAKE_BINARY_DIR})
+file(COPY "../ROMs" DESTINATION ${CMAKE_BINARY_DIR})
 
 add_subdirectory("Libs/glad")
 target_link_libraries(MegaJIT_8 glad)

@@ -58,7 +58,7 @@ constexpr nfdnfilteritem_t asmFilterItem[1]{ {STR("x64 Assembly"), STR("txt")} }
 
 std::string instrPerSecondStr{"Instructions per second: 0.000 MIPS"};
 
-std::string toMIPSstring(uint32_t instr)
+std::string toMIPSstring(uint64_t instr)
 {
     double mips = instr / 1e6;
 
@@ -549,7 +549,7 @@ void setWindowSize()
     ImGui::Render();
 
     const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    viewport_width = { static_cast<int>(mode->width * 0.62f) };
+    viewport_width = { static_cast<int>(mode->width * 0.55f) };
     viewport_height = viewport_width / 2;
 
     glfwSetWindowSize(window, viewport_width, viewport_height + menuBarHeight);
