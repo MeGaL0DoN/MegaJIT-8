@@ -682,37 +682,33 @@ public:
 
 	inline void emitFX33(uint8_t regX)
 	{
-		movzx(rcx, I_REG);
-		movzx(r8, V_REG(regX));
-
-		mov(edx, r8d);
-		imul(edx, edx, 205);
-		shr(edx, 11);
-
-		mov(r9d, edx);
-		imul(r9d, r9d, 10);
-		sub(r9d, r8d);
-		neg(r9d);
-
-		lea(rax, ptr[rcx + 2]);
-		and_(rax, 0xFFF);
-		mov(RAM_PTR(rax), r9b);
-
-		mov(r9d, edx);
-		imul(edx, edx, 205);
-		shr(edx, 11);
-		imul(edx, edx, 10);
-		sub(r9d, edx);
-
-		lea(rax, ptr[rcx + 1]);
-		and_(rax, 0xFFF);
-		mov(RAM_PTR(rax), r9b);
-
-		imul(r8d, r8d, 41);
+		movzx(eax, V_REG(regX));
+		lea(ecx, ptr[rax + 4 * rax]);
+		lea(r8d, ptr[rax + 8 * rcx]);
 		shr(r8d, 12);
-
-		and_(rcx, 0xFFF);
-		mov(RAM_PTR(rcx), r8b);
+		movzx(ecx, I_REG);
+		mov(edx, ecx);
+		and_(edx, 0xFFF);
+		mov(RAM_PTR(rdx), r8b);
+		imul(r8d, eax, 205);
+		shr(r8d, 11);
+		lea(edx, ptr[r8 + 4 * r8]);
+		lea(edx, ptr[rdx + 4 * rdx]);
+		add(edx, r8d);
+		shr(edx, 7);
+		and_(edx, 6);
+		lea(edx, ptr[rdx + 4 * rdx]);
+		mov(r9d, r8d);
+		sub(r9b, dl);
+		lea(edx, ptr[rcx + 1]);
+		and_(edx, 0xFFF);
+		mov(RAM_PTR(rdx), r9b);
+		add(r8d, r8d);
+		lea(r8d, ptr[r8 + 4 * r8]);
+		sub(al, r8b);
+		add(ecx, 2);
+		and_(ecx, 0xFFF);
+		mov(RAM_PTR(rcx), al);
 	}
 
 	inline void emitFX55(uint8_t regX)

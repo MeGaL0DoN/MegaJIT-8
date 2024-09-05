@@ -549,7 +549,7 @@ void setWindowSize()
     ImGui::Render();
 
     const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    viewport_width = { static_cast<int>(mode->width * 0.55f) };
+    viewport_width = { static_cast<int>(mode->width * 0.54f) };
     viewport_height = viewport_width / 2;
 
     glfwSetWindowSize(window, viewport_width, viewport_height + menuBarHeight);
