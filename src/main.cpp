@@ -502,6 +502,11 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     glViewport(0, 0, viewport_width, viewport_height);
 }
 
+void window_pos_callback(GLFWwindow* window, int x, int y)
+{
+    glViewport(0, 0, viewport_width, viewport_height);  
+}
+
 void window_refresh_callback(GLFWwindow* _window)
 {
     (void)_window;
@@ -577,6 +582,7 @@ bool setGLFW()
 
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetWindowRefreshCallback(window, window_refresh_callback);
+    glfwSetWindowPosCallback(window, window_pos_callback);
     glfwSetKeyCallback(window, key_callback);
     glfwSetDropCallback(window, drop_callback);
 
