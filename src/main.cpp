@@ -527,7 +527,33 @@ inline std::wstring ToUTF16(const std::string& utf8Str)
     MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), utf8Str.length(), result.data(), size);
     return result;
 }
+
+#elif defined(__linux__) || defined(__unix__)
+#include <unistd.h>
+#elif defined(__APPLE__)
+#include <unistd.h>
+#include <libproc.h>
 #endif
+
+inline std::filesystem::path getExecutablePath()
+{
+#ifdef _WIN32
+    wchar_t pathBuf[MAX_PATH];
+    GetModuleFileNameW(NULL, pathBuf, MAX_PATH);
+#else
+    char pathBuf[4096];
+#ifdef __APPLE__
+    pid_t pid = getpid();
+    proc_pidpath(pid, pathBuf, sizeof(pathBuf));
+#elif defined(__linux__) || defined(__unix__)
+    ssize_t count = readlink("/proc/self/exe", pathBuf, sizeof(pathBuf));
+    if (count != -1) pathBuf[count] = '\0';
+#endif
+#endif
+
+    const std::filesystem::path path{ pathBuf };
+    return path.parent_path();
+}
 
 void drop_callback(GLFWwindow* _window, int count, const char** paths)
 {
@@ -622,7 +648,7 @@ int main()
     setBuffers();
 
     std::thread initThread{ ChipCore::initAudio };
-    loadROM("ROMs/chipLogo.ch8");
+    loadROM(getExecutablePath() / "ROMs" / "chipLogo.ch8");
 
     double lastTime = glfwGetTime();
     double executeTimer{};
