@@ -16,25 +16,45 @@
 #include "Shader.h"
 #include "resources.h"
 #include "ChipInterpretCore.h"
+#include "ChipCachedCore.h"
 #include "ChipJITCore.h"
 
-constexpr const char* APP_NAME = "MegaJIT-8";
+constexpr const char* APP_NAME { "MegaJIT-8" };
 
 extern ChipState s;
 
 ChipInterpretCore chipInterpretCore{};
+ChipCachedCore chipCachedCore{};
 ChipJITCore chipJITCore{};
-ChipCore* chipCore{ &chipJITCore };
+ChipCore* chipCore { &chipJITCore };
+
+enum class CHIPCore
+{
+    Interpret,
+    Cached,
+    JIT
+};
+
+CHIPCore currentCore()
+{
+    if (chipCore == &chipInterpretCore)
+        return CHIPCore::Interpret;
+    if (chipCore == &chipCachedCore)
+        return CHIPCore::Cached;
+    if (chipCore == &chipJITCore)
+        return CHIPCore::JIT;
+
+    UNREACHABLE();
+}
 
 std::thread cpuThread;
-std::atomic<bool> CPUThreadRunning{ false };
-uint64_t executedInstructions{ 0 };
+std::atomic<bool> CPUThreadRunning { false };
+uint64_t executedInstructions { 0 };
 
-bool JITMode{ true };
-bool unlimitedMode{ false };
+bool unlimitedMode { false };
 
 int IPF { 9 };
-bool paused{ false };
+bool paused { false };
 
 bool enableRainbow { false };
 Shader pixelShader;
@@ -44,7 +64,7 @@ int viewport_width, viewport_height;
 int menuBarHeight;
 GLFWwindow* window;
 
-bool fileDialogOpen{ false };
+bool fileDialogOpen { false };
 
 #ifdef _WIN32
 #define STR(s) L##s
@@ -52,11 +72,11 @@ bool fileDialogOpen{ false };
 #define STR(s) s
 #endif
 
-const std::filesystem::path defaultPath{ std::filesystem::current_path() };
-constexpr nfdnfilteritem_t ROMfilterItem[2]{ {STR("ROM File"), STR("ch8,bnc")} };
-constexpr nfdnfilteritem_t asmFilterItem[1]{ {STR("x64 Assembly"), STR("txt")} };
+const std::filesystem::path defaultPath { std::filesystem::current_path() };
+constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
+constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x64 Assembly"), STR("txt")} };
 
-std::string instrPerSecondStr{"Instructions per second: 0.000 MIPS"};
+std::string instrPerSecondStr {"Instructions per second: 0.000 MIPS"};
 
 std::string toMIPSstring(uint64_t instr)
 {
@@ -72,7 +92,7 @@ std::array<uint8_t, ChipState::SCRHeight * ChipState::SCRWidth> textureBuf;
 
 void draw()
 {
-    const auto& screenBuf = chipCore->getScreenBuffer();
+    const auto& screenBuf { chipCore->getScreenBuffer() };
 
     for (int i = 0; i < ChipState::SCRWidth * ChipState::SCRHeight; i++)
         textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
@@ -85,12 +105,12 @@ void setBuffers()
 {
     unsigned int VAO, VBO, EBO;
 
-    constexpr unsigned int indices[] =
+    constexpr unsigned int indices[]
     {
         0, 1, 3,
         1, 2, 3
     };
-    constexpr float vertices[] =
+    constexpr float vertices[]
     {
         1.0f,  1.0f, 0.0f,  1.0f,  0.0f,  // top right     
         1.0f, -1.0f, 0.0f,  1.0f,  1.0f,  // bottom right
@@ -126,28 +146,34 @@ void setBuffers()
     pixelShader = Shader(resources::vertexShader, resources::fragmentShader);
     pixelShader.use();
 
-    constexpr std::array<float, 4> whiteColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+    constexpr std::array<float, 4> whiteColor { 1.0f, 1.0f, 1.0f, 1.0f };
     pixelShader.setFloat4("foregroundCol", whiteColor.data());
 
-    constexpr std::array<float, 4> blackColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+    constexpr std::array<float, 4> blackColor { 0.0f, 0.0f, 0.0f, 1.0f };
     pixelShader.setFloat4("backgroundCol", blackColor.data());
 
     pixelShader.setBool("rainbow", false);
 }
 
-template <bool JIT>
+template <CHIPCore core>
 void cpuThreadExecute()
 {
-    uint64_t threadInstructions{ 0 };
+    uint64_t threadInstructions { 0 };
 
     while (CPUThreadRunning) [[likely]]
     {
-        if constexpr (JIT)
-            threadInstructions += chipJITCore.execute();
-        else
+        switch (core)
         {
+        case CHIPCore::JIT:
+            threadInstructions += chipJITCore.execute();
+            break;
+        case CHIPCore::Cached:
+            threadInstructions += chipCachedCore.execute();
+            break;
+        case CHIPCore::Interpret:
             chipInterpretCore.execute();
             threadInstructions++;
+            break;
         }
     }
 
@@ -157,7 +183,19 @@ void cpuThreadExecute()
 inline void startCPUThread()
 {
     CPUThreadRunning = true;
-    cpuThread = std::thread{ JITMode ? cpuThreadExecute<true> : cpuThreadExecute<false> };
+
+    switch (currentCore())
+    {
+    case CHIPCore::Interpret:
+        cpuThread = std::thread { cpuThreadExecute<CHIPCore::Interpret> };
+        break;
+    case CHIPCore::Cached:
+        cpuThread = std::thread{ cpuThreadExecute<CHIPCore::Cached> };
+        break;
+    case CHIPCore::JIT:
+        cpuThread = std::thread{ cpuThreadExecute<CHIPCore::JIT> };
+        break;
+    }
 }
 inline void stopCPUThread()
 {
@@ -206,12 +244,14 @@ inline void coreModeChanged()
     }
 }
 
-inline void clearJITcache()
+inline void clearCoreCaches()
 {
     bool threadRunning = CPUThreadRunning;
     if (threadRunning) stopCPUThread();
 
+    chipCachedCore.clearCache();
     chipJITCore.clearJITCache();
+
     if (threadRunning) startCPUThread();
 }
 
@@ -229,7 +269,7 @@ void renderImGUI()
             {
                 fileDialogOpen = true;
                 NFD::UniquePathN outPath;
-                nfdresult_t result = NFD::OpenDialog(outPath, ROMfilterItem, 1, defaultPath.c_str());
+                const nfdresult_t result { NFD::OpenDialog(outPath, ROMfilterItem, 1, defaultPath.c_str()) };
 
                 if (result == NFD_OKAY)
                     loadROM(outPath.get());
@@ -243,16 +283,16 @@ void renderImGUI()
         }
         if (ImGui::BeginMenu("Settings", "Ctrl+Q"))
         {
-            static bool showForegroundPicker{ false };
-            static bool showBackgroundPicker{ false };
-            static int volume{ 50 };
+            static bool showForegroundPicker { false };
+            static bool showBackgroundPicker { false };
+            static int volume { 50 };
 
             ImGui::SeparatorText("Sound");
             ImGui::Checkbox("Enable Sound", &ChipCore::enableAudio);
 
             if (ChipCore::enableAudio)
             {
-                ImGui::Separator();
+                ImGui::Spacing();
 
                 if (ImGui::SliderInt("Volume", &volume, 0, 100))
                     ChipCore::setVolume(volume / 100.0);
@@ -266,6 +306,7 @@ void renderImGUI()
                 showForegroundPicker = false;
             }
 
+            ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
@@ -288,9 +329,6 @@ void renderImGUI()
                     if (ImGui::ColorPicker3("Pick a Color", (float*)&foregroundColor))
                         pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
                 }
-
-                ImGui::Separator();
-                ImGui::Spacing();
             }
 
             ImGui::Text("Background Color");
@@ -336,12 +374,12 @@ void renderImGUI()
             ImGui::Text("Current Mode: ");
             ImGui::SameLine();
 
-            if (JITMode)
+            if (currentCore() == CHIPCore::JIT)
             {
                 if (ImGui::Button("JIT"))
                 {
-                    JITMode = false;
-                    chipCore = &chipInterpretCore;
+                    chipCore = &chipCachedCore;
+                    chipCachedCore.clearCache();
                     coreModeChanged();
                 }
 
@@ -351,7 +389,7 @@ void renderImGUI()
                 {
                     fileDialogOpen = true;
                     NFD::UniquePathN outPath;
-                    nfdresult_t result = NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt"));
+                    const nfdresult_t result { NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) };
 
                     if (result == NFD_OKAY)
                         chipJITCore.dumpCode(outPath.get());
@@ -360,16 +398,26 @@ void renderImGUI()
                 }
 
                 if (ImGui::Button("Clear Cache"))
-                    clearJITcache();
+                    clearCoreCaches();
             }
             else
             {
-                if (ImGui::Button("Interpreter"))
+                if (currentCore() == CHIPCore::Interpret)
                 {
-                    JITMode = true;
-                    chipCore = &chipJITCore;
-                    chipJITCore.clearJITCache();
-                    coreModeChanged();
+                    if (ImGui::Button("Interpreter"))
+                    {
+                        chipCore = &chipJITCore;
+                        chipJITCore.clearJITCache();
+                        coreModeChanged();
+                    }
+                }
+                else
+                {
+                    if (ImGui::Button("Cached Interpret"))
+                    {
+                        chipCore = &chipInterpretCore;
+                        coreModeChanged();
+                    }
                 }
             }
 
@@ -393,6 +441,7 @@ void renderImGUI()
                     }
                 }
 
+                chipCachedCore.setSlowMode(!unlimitedMode);
                 chipJITCore.setSlowMode(!unlimitedMode);
                 if (startThread) startCPUThread();
             }
@@ -414,19 +463,22 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            if (ImGui::Checkbox("VFReset", &Quirks::VFReset) && JITMode) clearJITcache();
-            if (ImGui::Checkbox("Shifting", &Quirks::Shifting) && JITMode) clearJITcache();
-            if (ImGui::Checkbox("Jumping", &Quirks::Jumping) && JITMode) clearJITcache();
-            if (ImGui::Checkbox("Clipping", &Quirks::Clipping) && JITMode) clearJITcache();
-            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement) && JITMode) clearJITcache();
+            const bool hasCache { currentCore() == CHIPCore::Cached || currentCore() == CHIPCore::JIT};
+
+            if (ImGui::Checkbox("VFReset", &Quirks::VFReset) && hasCache) clearCoreCaches();
+            if (ImGui::Checkbox("Shifting", &Quirks::Shifting) && hasCache) clearCoreCaches();
+            if (ImGui::Checkbox("Jumping", &Quirks::Jumping) && hasCache) clearCoreCaches();
+            if (ImGui::Checkbox("Clipping", &Quirks::Clipping) && hasCache) clearCoreCaches();
+            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement) && hasCache) clearCoreCaches();
 
             ImGui::Spacing();
             ImGui::Separator();
+            ImGui::Spacing();
 
             if (ImGui::Button("Reset to Default"))
             {
                 Quirks::Reset();
-                if (JITMode) clearJITcache();
+                if (hasCache) clearCoreCaches();
             }
 
             ImGui::EndMenu();
@@ -451,7 +503,7 @@ void render()
     glfwSwapBuffers(window);
 }
 
-const std::map<int, uint8_t> keyConfig =
+const std::map<int, uint8_t> keyConfig
 {
     {49, 1},
     {50, 2},
@@ -489,7 +541,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
      if (!paused)
      {
-         auto keyInd = keyConfig.find(key);
+         const auto keyInd { keyConfig.find(key) };
 
          if (keyInd != keyConfig.end())
              chipCore->setKey(keyInd->second, action);
@@ -579,7 +631,7 @@ void setWindowSize()
     ImGui::EndMainMenuBar();
     ImGui::Render();
 
-    const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+    const GLFWvidmode* mode { glfwGetVideoMode(glfwGetPrimaryMonitor()) };
     viewport_width = { static_cast<int>(mode->width * 0.54f) };
     viewport_height = viewport_width / 2;
 
@@ -641,7 +693,9 @@ void setImGUI()
 
 int main()
 {
-    if (!setGLFW()) return -1;
+    if (!setGLFW())
+        return -1;
+
     setImGUI();
     NFD_Init();
     setWindowSize();
@@ -650,9 +704,11 @@ int main()
     std::thread initThread{ ChipCore::initAudio };
     loadROM(getExecutablePath() / "ROMs" / "chipLogo.ch8");
 
-    double lastTime = glfwGetTime();
+    double lastTime { glfwGetTime() };
     double executeTimer{};
     double secondsTimer{};
+
+    constexpr double FRAME_RATE { 1.0 / 60 };
 
     while (!glfwWindowShouldClose(window))
     {
@@ -664,22 +720,30 @@ int main()
 
         glfwPollEvents();
 
-        while (executeTimer >= 1.0 / 60)
+        while (executeTimer >= FRAME_RATE)
         {
-            executeTimer -= (1.0 / 60);
+            executeTimer -= FRAME_RATE;
 
             if (!paused && chipCore->isRomLoaded())
             {
                 chipCore->updateTimers();
 
-                if (!unlimitedMode)
+                if (unlimitedMode)
+                    continue;
+
+                for (int i = 0; i < IPF; i++)
                 {
-                    for (int i = 0; i < IPF; i++)
+                    switch (currentCore())
                     {
-                        if (JITMode)
-							chipJITCore.execute();
-						else
-							chipInterpretCore.execute();			
+                    case CHIPCore::JIT:
+                        chipJITCore.execute();
+                        break;
+                    case CHIPCore::Cached:
+                        chipCachedCore.execute();
+                        break;
+                    case CHIPCore::Interpret:
+                        chipInterpretCore.execute();
+                        break;
                     }
                 }
             }
@@ -689,15 +753,15 @@ int main()
         {
             if (unlimitedMode)
             {
-                bool threadRunning = CPUThreadRunning;
+                const bool threadRunning { CPUThreadRunning };
 
                 if (threadRunning)
                     stopCPUThread();
 
-                std::string mipsStr = toMIPSstring(executedInstructions / secondsTimer);
+                const std::string mipsStr { toMIPSstring(executedInstructions / secondsTimer) };
                 instrPerSecondStr = "Instructions per second: " + mipsStr;
 
-                std::string title = std::string(APP_NAME) + " (" + mipsStr + ")";
+                const std::string title { std::string(APP_NAME) + " (" + mipsStr + ")" };
                 glfwSetWindowTitle(window, title.c_str());
 
                 executedInstructions = 0;
@@ -710,7 +774,6 @@ int main()
         }
 
         render();
-
         lastTime = currentTime;
     }
 

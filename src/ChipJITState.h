@@ -12,14 +12,13 @@ struct JITBlock
 	uint32_t cacheOffset{};
 
 	JITBlock(uint16_t startPC) : startPC(startPC) 
-	{
-	}
+	{}
 };
 
 struct JITMapEntry
 {
 	bool isValid { false };
-	int16_t block{ -1 };
+	int16_t block { -1 };
 };
 
 struct ChipJITState

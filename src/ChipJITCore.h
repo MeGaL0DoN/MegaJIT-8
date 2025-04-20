@@ -13,30 +13,24 @@
 #include "macros.h"
 
 extern ChipState s;
-extern ChipJITState JIT;
+ChipJITState JIT;
 
 class ChipJITCore : public ChipCore
 {
 public:
 	FORCE_INLINE uint64_t execute()
 	{
-		auto map = JIT.blockMap[s.pc];
-
-		if (!map.isValid) [[unlikely]]
-			return compileBlock();
-
-		auto& block = JIT.blocks[map.block];
-		s.pc = block.endPC;
-		return c.execute(block.cacheOffset);
+		const auto& map { JIT.blockMap[s.pc] };
+		return map.isValid ? executeBlock(map.block) : compileBlock();
 	}
 
-	inline void clearJITCache()
+	void clearJITCache()
 	{
 		JIT.reset();
 		c.clearCache();
 	}
 
-	inline void setSlowMode(bool enable)
+	void setSlowMode(bool enable)
 	{
 		instructionsPerBlock = enable ? 1 : BLOCK_MAX_INSTR;
 		clearJITCache();
@@ -72,7 +66,7 @@ public:
 	}
 private:
 	ud_t ud_obj;
-	bool udInitialized{ false };
+	bool udInitialized { false };
 
 private:
 	ChipEmitter c{};
@@ -86,15 +80,22 @@ private:
 		clearJITCache();
 	}
 
+	FORCE_INLINE uint64_t executeBlock(int16_t ind)
+	{
+		const auto& block { JIT.blocks[ind] };
+		s.pc = block.endPC;
+		return c.execute(block.cacheOffset);
+	}
+
 	inline uint64_t compileBlock()
 	{
-		constexpr size_t CACHE_CLEAR_THRESHOLD = static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.9);
+		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.9) };
 
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
 
 		s.pc &= 0xFFF;
-		auto& map = JIT.blockMap[s.pc];
+		auto& map { JIT.blockMap[s.pc] };
 		map.isValid = true;
 
 		if (map.block == -1) [[likely]]
@@ -103,7 +104,7 @@ private:
 			JIT.blocks.push_back(JITBlock{ s.pc });
 		}
 
-		auto& block = JIT.blocks[map.block];
+		auto& block { JIT.blocks[map.block] };
 		block.cacheOffset = static_cast<uint32_t>(c.getCodeSize());
 
 		analyzeBlock();
@@ -117,7 +118,7 @@ private:
 		return c.execute(block.cacheOffset);
 	}
 
-	bool isFlowNext(uint16_t pc)
+	inline bool isFlowNext(uint16_t pc)
 	{
 		const uint16_t opcode = (s.RAM[pc & 0xFFF] << 8) | s.RAM[(pc + 1) & 0xFFF];
 
@@ -142,17 +143,16 @@ private:
 		}
 	}
 
-	void analyzeBlock()
+	inline void analyzeBlock()
 	{
-		uint16_t pc = s.pc;
+		uint16_t pc { s.pc };
 
 		for (int i = 0; i < instructionsPerBlock; i++)
 		{
 			const uint16_t opcode = (s.RAM[pc & 0xFFF] << 8) | s.RAM[(pc + 1) & 0xFFF];
-			const uint8_t xReg = ((opcode & 0x0F00) >> 8) & 0xF;
-			const uint8_t yReg = ((opcode & 0x00F0) >> 4) & 0xF;
-
 			pc += 2;
+
+			const uint8_t xReg = ((opcode & 0x0F00) >> 8) & 0xF, yReg = ((opcode & 0x00F0) >> 4) & 0xF;
 
 			switch (opcode & 0xF000)
 			{
@@ -255,7 +255,7 @@ private:
 		}
 	}
 
-	void emitBlock()
+	inline void emitBlock()
 	{
 		c.allocateRegs();
 		c.emitPrologue();
@@ -265,12 +265,11 @@ private:
 		while (c.instructions < instructionsPerBlock || condition)
 		{
 			const uint16_t opcode = (s.RAM[s.pc & 0xFFF] << 8) | s.RAM[(s.pc + 1) & 0xFFF];
-
-			const uint8_t xOperand = ((opcode & 0x0F00) >> 8) & 0xF;
-			const uint8_t yOperand = ((opcode & 0x00F0) >> 4) & 0xF;
-			const uint8_t value = opcode & 0x00FF;
-
 			s.pc += 2;
+
+			const uint8_t xOp = ((opcode & 0x0F00) >> 8) & 0xF, yOp = ((opcode & 0x00F0) >> 4) & 0xF;
+			const uint8_t nn = opcode & 0x00FF;
+
 			c.instructions++;
 
 			switch (opcode & 0xF000)
@@ -297,74 +296,74 @@ private:
 			case 0x3000:
 				if (isFlowNext(s.pc))
 				{
-					c.emit3XNN<false>(xOperand, value);
+					c.emit3XNN<false>(xOp, nn);
 					return;
 				}
 				else
 				{
-					c.emit3XNN<true>(xOperand, value);
+					c.emit3XNN<true>(xOp, nn);
 					condition = true;
 					continue;
 				}
 			case 0x4000:
 				if (isFlowNext(s.pc))
 				{
-					c.emit4XNN<false>(xOperand, value);
+					c.emit4XNN<false>(xOp, nn);
 					return;
 				}
 				else
 				{
-					c.emit4XNN<true>(xOperand, value);
+					c.emit4XNN<true>(xOp, nn);
 					condition = true;
 					continue;
 				}
 			case 0x5000:
 				if (isFlowNext(s.pc))
 				{
-					c.emit5XY0<false>(xOperand, yOperand);
+					c.emit5XY0<false>(xOp, yOp);
 					return;
 				}
 				else
 				{
-					c.emit5XY0<true>(xOperand, yOperand);
+					c.emit5XY0<true>(xOp, yOp);
 					condition = true;
 					continue;
 				}
 			case 0x6000:
-				c.emit6XNN(xOperand, value);
+				c.emit6XNN(xOp, nn);
 				break;
 			case 0x7000:
-				c.emit7XNN(xOperand, value);
+				c.emit7XNN(xOp, nn);
 				break;
 			case 0x8000:
 				switch (opcode & 0x000F)
 				{
 				case 0x0000:
-					c.emit8XY0(xOperand, yOperand);
+					c.emit8XY0(xOp, yOp);
 					break;
 				case 0x0001:
-					c.emit8XY1(xOperand, yOperand);
+					c.emit8XY1(xOp, yOp);
 					break;
 				case 0x0002:
-					c.emit8XY2(xOperand, yOperand);
+					c.emit8XY2(xOp, yOp);
 					break;
 				case 0x0003:
-					c.emit8XY3(xOperand, yOperand);
+					c.emit8XY3(xOp, yOp);
 					break;
 				case 0x0004:
-					c.emit8XY4(xOperand, yOperand);
+					c.emit8XY4(xOp, yOp);
 					break;
 				case 0x0005:
-					c.emit8XY5(xOperand, yOperand);
+					c.emit8XY5(xOp, yOp);
 					break;
 				case 0x0006:
-					c.emit8XY6(xOperand, yOperand);
+					c.emit8XY6(xOp, yOp);
 					break;
 				case 0x0007:
-					c.emit8XY7(xOperand, yOperand);
+					c.emit8XY7(xOp, yOp);
 					break;
 				case 0x000E:
-					c.emit8XYE(xOperand, yOperand);
+					c.emit8XYE(xOp, yOp);
 					break;
 				}
 				break;
@@ -374,12 +373,12 @@ private:
 				case 0x0000:
 					if (isFlowNext(s.pc))
 					{
-						c.emit9XY0<false>(xOperand, yOperand);
+						c.emit9XY0<false>(xOp, yOp);
 						return;
 					}
 					else
 					{
-						c.emit9XY0<true>(xOperand, yOperand);
+						c.emit9XY0<true>(xOp, yOp);
 						condition = true;
 						continue;
 					}
@@ -389,13 +388,13 @@ private:
 				c.emitANNN(opcode & 0xFFF);
 				break;
 			case 0xB000:
-				c.emitBNNN(opcode & 0xFFF, xOperand);
+				c.emitBNNN(opcode & 0xFFF, xOp);
 				return;
 			case 0xC000:
-				c.emitCXNN(xOperand, value);
+				c.emitCXNN(xOp, nn);
 				break;
 			case 0xD000:
-				c.emitDXYN(xOperand, yOperand, opcode & 0x000F);
+				c.emitDXYN(xOp, yOp, opcode & 0x000F);
 				break;
 			case 0xE000:
 				switch (opcode & 0x00FF)
@@ -403,24 +402,24 @@ private:
 				case 0x009E:
 					if (isFlowNext(s.pc))
 					{
-						c.emitEX9E<false>(xOperand);
+						c.emitEX9E<false>(xOp);
 						return;
 					}
 					else
 					{
-						c.emitEX9E<true>(xOperand);
+						c.emitEX9E<true>(xOp);
 						condition = true;
 						continue;
 					}
 				case 0x00A1:
 					if (isFlowNext(s.pc))
 					{
-						c.emitEXA1<false>(xOperand);
+						c.emitEXA1<false>(xOp);
 						return;
 					}
 					else
 					{
-						c.emitEXA1<true>(xOperand);
+						c.emitEXA1<true>(xOp);
 						condition = true;
 						continue;
 					}
@@ -430,31 +429,32 @@ private:
 				switch (opcode & 0x00FF)
 				{
 				case 0x0007:
-					c.emitFX07(xOperand);
+					c.emitFX07(xOp);
 					break;
 				case 0x000A:
-					c.emitFX0A(xOperand);
+					c.emitFX0A(xOp);
 					return;
 				case 0x001E:
-					c.emitFX1E(xOperand);
+					c.emitFX1E(xOp);
 					break;
 				case 0x0015:
-					c.emitFX15(xOperand);
+					c.emitFX15(xOp);
 					break;
 				case 0x0018:
-					c.emitFX18(xOperand);
+					c.emitFX18(xOp);
 					break;
 				case 0x0029:
-					c.emitFX29(xOperand);
+					c.emitFX29(xOp);
 					break;
+				// Ending the block on memory store, because self-modifying code can modify the current block.
 				case 0x0033:
-					c.emitFX33(xOperand);
-					break;
+					c.emitFX33(xOp);
+					return;
 				case 0x0055:
-					c.emitFX55(xOperand);
-					return; // ending the block on memory store, because self-modifying code can modify the current block.
+					c.emitFX55(xOp);
+					return;
 				case 0x0065:
-					c.emitFX65(xOperand); 
+					c.emitFX65(xOp); 
 					break;
 				}
 				break;

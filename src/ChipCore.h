@@ -16,10 +16,10 @@ public:
 
 	bool loadROM(const std::filesystem::path& path)
 	{
-		std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+		std::ifstream ifs { path, std::ios::binary | std::ios::ate };
 		if (!ifs) return false;
 
-		std::ifstream::pos_type size = ifs.tellg();
+		const std::ifstream::pos_type size { ifs.tellg() };
 
 		if (size <= sizeof(s.RAM) - 0x200)
 		{
@@ -54,8 +54,8 @@ public:
 
 	inline void updateTimers()
 	{
-		if (s.delay_timer > 0) s.delay_timer--;
-		if (s.sound_timer > 0) s.sound_timer--;
+		if (s.delayTimer > 0) s.delayTimer--;
+		if (s.soundTimer > 0) s.soundTimer--;
 	}
 
 protected:

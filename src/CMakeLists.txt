@@ -12,8 +12,8 @@ elseif(MINGW)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 endif()
 
-add_executable(MegaJIT_8 main.cpp
-        main.cpp
+add_executable(MegaJIT_8 
+        Main.cpp
         Quirks.h
         resources.h
         macros.h
@@ -22,12 +22,12 @@ add_executable(MegaJIT_8 main.cpp
         ChipCore.cpp
         ChipCore.h
         ChipEmitter.h
-        ChipJITState.cpp
+        
         ChipJITState.h
         ChipState.cpp
         ChipState.h
         ChipInterpretCore.h
-        ChipJITCore.h)
+        ChipJITCore.h "ChipCachedCore.h" "ChipCachedState.h")
 
 if (MSVC)
     set_target_properties(

@@ -159,7 +159,7 @@ private:
 	}
 
 	template<bool toMem>
-	inline void store(uint8_t count)
+	inline void store(int count)
 	{
 		movzx(rdx, I_REG);
 
@@ -179,9 +179,21 @@ private:
 	{
 		for (auto& block : JIT.blocks)
 		{
-			if (block.startPC <= endAddr && block.endPC >= startAddr)
+			if (block.startPC <= endAddr && (block.endPC - 2) >= startAddr)
 				JIT.blockMap[block.startPC].isValid = false;
 		}
+	}
+
+	inline void emitBlockInvalidation(int count)
+	{
+		movzx(ARG1, I_REG);
+		lea(ARG2, ptr[ARG1 + count]);
+
+		push(BASE);
+		if (blockBranches > 0) push(BRANCH_SKIP_REG);
+		callFunc((size_t)invalidateBlocks);
+		if (blockBranches > 0) pop(BRANCH_SKIP_REG);
+		pop(BASE);
 	}
 
 	inline void resetState()
@@ -209,7 +221,7 @@ private:
 	}
 
 public:
-	static constexpr uint32_t MAX_CACHE_SIZE = 262144;
+	static constexpr uint32_t MAX_CACHE_SIZE { 262144 };
 
 	std::array<uint8_t, 16> VRegUsage{};
 	uint8_t IRegUsage{ 0 };
@@ -319,6 +331,11 @@ public:
 				mov(qword[rcx + i * 8], 0);
 		}
 	}
+
+	//void setCodeOffset(size_t offset)
+	//{
+	//	setSize(offset);
+	//}
 
 	inline const uint8_t* getCodePtr() const { return getCode(); }
 	inline size_t getCodeSize() const { return getSize(); }
@@ -654,16 +671,16 @@ public:
 
 	inline void emitFX07(uint8_t regX)
 	{
-		MOV(V_REG(regX), byte[BASE + offsetof(ChipState, delay_timer)]);
+		MOV(V_REG(regX), byte[BASE + offsetof(ChipState, delayTimer)]);
 	}
 
 	inline void emitFX15(uint8_t regX)
 	{
-		MOV(byte[BASE + offsetof(ChipState, delay_timer)], V_REG(regX));
+		MOV(byte[BASE + offsetof(ChipState, delayTimer)], V_REG(regX));
 	}
 	inline void emitFX18(uint8_t regX)
 	{
-		MOV(byte[BASE + offsetof(ChipState, sound_timer)], V_REG(regX));
+		MOV(byte[BASE + offsetof(ChipState, soundTimer)], V_REG(regX));
 	}
 
 	inline void emitFX1E(uint8_t regX)
@@ -709,20 +726,14 @@ public:
 		add(ecx, 2);
 		and_(ecx, 0xFFF);
 		mov(RAM_PTR(rcx), al);
+
+		emitBlockInvalidation(2);
 	}
 
 	inline void emitFX55(uint8_t regX)
 	{
 		store<true>(regX);
-
-		movzx(ARG1, I_REG);
-		lea(ARG2, ptr[ARG1 + regX]);
-
-		push(BASE);
-		if (blockBranches > 0) push(BRANCH_SKIP_REG);
-		callFunc((size_t)invalidateBlocks);
-		if (blockBranches > 0) pop(BRANCH_SKIP_REG);
-		pop(BASE);
+		emitBlockInvalidation(regX);
 
 		if (Quirks::MemoryIncrement)
 			add(I_REG, regX + 1);

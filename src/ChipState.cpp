@@ -26,8 +26,8 @@ void ChipState::reset()
 	pc = 0x200;
 	I = 0;
 	sp = 0;
-	delay_timer = 0;
-	sound_timer = 0;
+	delayTimer = 0;
+	soundTimer = 0;
 	inputReg = nullptr;
 	firstFX0ACall = true;
 

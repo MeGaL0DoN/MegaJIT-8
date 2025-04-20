@@ -4,9 +4,9 @@
 
 struct ChipState
 {
-	static constexpr uint16_t RAM_SIZE = 4096;
-	static constexpr int SCRWidth = 64;
-	static constexpr int SCRHeight = 32;
+	static constexpr uint16_t RAM_SIZE { 4096 };
+	static constexpr int SCRWidth { 64 };
+	static constexpr int SCRHeight { 32 };
 
 	std::array<uint8_t, RAM_SIZE> RAM{};
 
@@ -14,8 +14,8 @@ struct ChipState
 	uint16_t I{};
 	uint16_t pc{};
 
-	uint8_t delay_timer{};
-	uint8_t sound_timer{};
+	uint8_t delayTimer{};
+	uint8_t soundTimer{};
 
 	std::array<uint16_t, 16> stack{};
 	uint16_t sp{};

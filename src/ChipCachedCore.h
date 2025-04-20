@@ -1,0 +1,640 @@
+#pragma once
+
+#include <random>
+
+#include "ChipCachedState.h"
+#include "ChipCore.h"
+#include "Quirks.h"
+#include "macros.h"
+
+extern ChipState s;
+ChipCachedState cache{};
+
+struct Instruction
+{
+	uint16_t nnn;
+	uint8_t nn;
+	uint8_t n;
+	uint8_t x;
+	uint8_t y;
+};
+
+void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
+{
+	for (auto& block : cache.blocks)
+	{
+		if (block.startPC <= endAddr && (block.endPC - 2) >= startAddr)
+			cache.blockMap[block.startPC].isValid = false;
+	}
+}
+
+void op_00E0(const Instruction& instr)
+{
+	std::memset(s.screenBuffer.data(), 0, sizeof(s.screenBuffer));
+}
+void op_00EE(const Instruction& instr)
+{
+	s.pc = s.stack[(--s.sp) & 0xF];
+}
+void op_1NNN(const Instruction& instr)
+{
+	s.pc = instr.nnn;
+}
+void op_2NNN(const Instruction& instr)
+{
+	s.stack[(s.sp++) & 0xF] = s.pc;
+	s.pc = instr.nnn;
+}
+void op_3XNN(const Instruction& instr)
+{
+	if (s.V[instr.x] == instr.nn) s.pc += 2;
+}
+void op_4XNN(const Instruction& instr)
+{
+	if (s.V[instr.x] != instr.nn) s.pc += 2;
+}
+void op_5XY0(const Instruction& instr)
+{
+	if (s.V[instr.x] == s.V[instr.y]) s.pc += 2;
+}
+void op_6XNN(const Instruction& instr)
+{
+	s.V[instr.x] = instr.nn;
+}
+void op_7XNN(const Instruction& instr)
+{
+	s.V[instr.x] += instr.nn;
+}
+void op_8XY0(const Instruction& instr)
+{
+	s.V[instr.x] = s.V[instr.y];
+}
+
+template<bool vfReset>
+void op_8XY1(const Instruction& instr)
+{
+	s.V[instr.x] |= s.V[instr.y];
+	if constexpr (vfReset) s.V[0xF] = 0;
+}
+template<bool vfReset>
+void op_8XY2(const Instruction& instr)
+{
+	s.V[instr.x] &= s.V[instr.y];
+	if constexpr (vfReset) s.V[0xF] = 0;
+}
+template<bool vfReset>
+void op_8XY3(const Instruction& instr)
+{
+	s.V[instr.x] ^= s.V[instr.y];
+	if constexpr (vfReset) s.V[0xF] = 0;
+}
+void op_8XY4(const Instruction& instr)
+{
+	s.V[instr.x] += s.V[instr.y];
+	s.V[0xF] = s.V[instr.x] < s.V[instr.y];
+}
+void op_8XY5(const Instruction& instr)
+{
+	const uint8_t flag = s.V[instr.x] >= s.V[instr.y];
+	s.V[instr.x] -= s.V[instr.y];
+	s.V[0xF] = flag;
+}
+template<bool shifting>
+void op_8XY6(const Instruction& instr)
+{
+	if constexpr (!shifting) s.V[instr.x] = s.V[instr.y];
+	const uint8_t lsb = s.V[instr.x] & 0x1;
+	s.V[instr.x] >>= 1;
+	s.V[0xF] = lsb;
+}
+void op_8XY7(const Instruction& instr)
+{
+	s.V[instr.x] = s.V[instr.y] - s.V[instr.x];
+	s.V[0xF] = s.V[instr.y] >= s.V[instr.x];
+}
+template<bool shifting>
+void op_8XYE(const Instruction& instr)
+{
+	if constexpr (!shifting) s.V[instr.x] = s.V[instr.y];
+	const uint8_t msb = s.V[instr.x] >> 7;
+	s.V[instr.x] <<= 1;
+	s.V[0xF] = msb;
+}
+
+void op_9XY0(const Instruction& instr)
+{
+	if (s.V[instr.x] != s.V[instr.y]) s.pc += 2;
+}
+void op_ANNN(const Instruction& instr)
+{
+	s.I = instr.nnn;
+}
+template <bool jumping>
+void op_BNNN(const Instruction& instr)
+{
+	if constexpr (jumping) s.pc = s.V[instr.x] + instr.nnn;
+	else s.pc = s.V[0] + instr.nnn;
+
+	s.pc &= 0xFFF;
+}
+void op_CXNN(const Instruction& instr)
+{
+	s.V[instr.x] = rand() & instr.nn;
+}
+
+template <bool clipping, uint8_t height>
+void op_DXYN(const Instruction& instr)
+{
+	if (height == 0)
+	{
+		s.V[0xF] = 0;
+		return;
+	}
+
+	uint8_t Xpos = s.V[instr.x] & (ChipState::SCRWidth - 1);
+	uint8_t Ypos = s.V[instr.y] & (ChipState::SCRHeight - 1);
+
+	s.V[0xF] = 0;
+	const bool partialDraw { Xpos > 56 };
+
+	for (int i = 0; i < height; i++)
+	{
+		const uint8_t spriteRow { s.RAM[(s.I + i) & 0xFFF] };
+
+		if constexpr (clipping)
+		{
+			if (Ypos >= ChipState::SCRHeight)
+				break;
+		}
+		else
+			Ypos &= (ChipState::SCRHeight - 1);
+
+		uint64_t spriteMask;
+
+		if (partialDraw)
+		{
+			const uint64_t leftPart { static_cast<uint64_t>(spriteRow) >> (Xpos - 56) };
+
+			if constexpr (clipping)
+				spriteMask = leftPart;
+			else
+			{
+				const uint64_t rightPart { static_cast<uint64_t>(spriteRow) << (64 - (Xpos - 56)) };
+				spriteMask = leftPart | rightPart;
+			}
+		}
+		else
+			spriteMask = static_cast<uint64_t>(spriteRow) << (63 - Xpos - 7);
+
+		uint64_t& screenRow { s.screenBuffer[Ypos] };
+		s.V[0xF] |= ((screenRow & spriteMask) != 0);
+
+		screenRow ^= spriteMask;
+		Ypos++;
+	}
+}
+
+void op_EX9E(const Instruction& instr)
+{
+	if (s.keys[s.V[instr.x] & 0xF]) s.pc += 2;
+}
+void op_EXA1(const Instruction& instr)
+{
+	if (!s.keys[s.V[instr.x] & 0xF]) s.pc += 2;
+}
+void op_FX07(const Instruction& instr)
+{
+	s.V[instr.x] = s.delayTimer;
+}
+void op_FX0A(const Instruction& instr)
+{
+	if (s.firstFX0ACall)
+	{
+		s.inputReg = &s.V[instr.x];
+		s.firstFX0ACall = false;
+	}
+	else if (s.inputReg == nullptr)
+	{
+		s.firstFX0ACall = true;
+		return;
+	}
+
+	s.pc -= 2;
+}
+void op_FX15(const Instruction& instr)
+{
+	s.delayTimer = s.V[instr.x];
+}
+void op_FX18(const Instruction& instr)
+{
+	s.soundTimer = s.V[instr.x];
+}
+void op_FX1E(const Instruction& instr)
+{
+	s.I += s.V[instr.x];
+}
+void op_FX29(const Instruction& instr)
+{
+	s.I = (s.V[instr.x] & 0xF) * 0x5;
+}
+void op_FX33(const Instruction& instr)
+{
+	s.RAM[s.I & 0xFFF] = s.V[instr.x] / 100;
+	s.RAM[(s.I + 1) & 0xFFF] = (s.V[instr.x] / 10) % 10;
+	s.RAM[(s.I + 2) & 0xFFF] = s.V[instr.x] % 10;
+
+	invalidateBlocks(s.I, s.I + 2);
+}
+
+template<bool increment>
+void op_FX55(const Instruction& instr)
+{
+	for (int i = 0; i <= instr.x; i++)
+		s.RAM[(s.I + i) & 0xFFF] = s.V[i];
+
+	invalidateBlocks(s.I, s.I + instr.x);
+
+	if constexpr (increment) s.I += instr.x + 1;
+}
+template<bool increment>
+void op_FX65(const Instruction& instr)
+{
+	for (int i = 0; i <= instr.x; i++)
+		s.V[i] = s.RAM[(s.I + i) & 0xFFF];
+
+	if constexpr (increment) s.I += instr.x + 1;
+}
+
+class ChipCachedCore : public ChipCore
+{
+public:
+	FORCE_INLINE uint64_t execute()
+	{
+		const auto& map { cache.blockMap[s.pc] };
+		return map.isValid ? executeBlock(map.block) : compileBlock();
+	}
+
+	void clearCache()
+	{
+		cache.reset();
+		ops.clear();
+	}
+
+	void setSlowMode(bool enable)
+	{
+		instructionsPerBlock = enable ? 1 : BLOCK_MAX_INSTR;
+		clearCache();
+	}
+
+private:
+	struct CacheOp
+	{
+		void (*func)(const Instruction&){};
+		Instruction instr;
+	};
+
+	std::vector<CacheOp> ops{};
+
+	void initialize() override
+	{
+		s.reset();
+		clearCache();
+	}
+
+	FORCE_INLINE uint64_t executeBlock(int16_t ind)
+	{
+		const auto& block { cache.blocks[ind] };
+		const auto* blockOps { &ops[block.cacheOffset] };
+		const uint64_t instrCount { block.instrCount };
+
+		s.pc = block.endPC;
+
+		for (int i = 0; i < instrCount; i++)
+		{
+			const auto& op { blockOps[i] };
+			op.func(op.instr);
+		}
+
+		return instrCount;
+	}
+
+	FORCE_INLINE uint64_t compileBlock()
+	{
+		constexpr size_t CACHE_CLEAR_THRESHOLD { 16384 };
+
+		if (ops.size() >= CACHE_CLEAR_THRESHOLD)
+			clearCache();
+
+		s.pc &= 0xFFF;
+		auto& map { cache.blockMap[s.pc] };
+		map.isValid = true;
+
+		if (map.block == -1) [[likely]]
+		{
+			map.block = cache.blocks.size();
+			cache.blocks.push_back(CacheBlock{ s.pc });
+		}
+
+		auto& block { cache.blocks[map.block] };
+		block.cacheOffset = ops.size();
+		emitBlock(block);
+
+		s.pc &= 0xFFF;
+		block.endPC = s.pc;
+
+		const auto* blockOps { &ops[block.cacheOffset] };
+
+		for (int i = 0; i < block.instrCount; i++)
+		{
+			const auto& op { blockOps[i] };
+			op.func(op.instr);
+		}
+
+		return block.instrCount;
+	}
+
+	static constexpr uint64_t BLOCK_MAX_INSTR { 64 };
+	uint64_t instructionsPerBlock { 1 };
+
+	inline void emitBlock(CacheBlock& block)
+	{
+		block.instrCount = 0;
+
+		while (block.instrCount < instructionsPerBlock)
+		{
+			const uint16_t opcode = (s.RAM[s.pc & 0xFFF] << 8) | s.RAM[(s.pc + 1) & 0xFFF];
+			s.pc += 2;
+
+			Instruction instr
+			{
+				static_cast<uint16_t>(opcode & 0xFFF), 
+				static_cast<uint8_t>(opcode & 0xFF), 
+				static_cast<uint8_t>(opcode & 0xF),
+				static_cast<uint8_t>((opcode & 0x0F00) >> 8),
+				static_cast<uint8_t>((opcode & 0x00F0) >> 4)
+			};
+
+			block.instrCount++;
+
+			switch (opcode & 0xF000)
+			{
+			case 0x0000:
+			{
+				switch (opcode & 0x0FFF)
+				{
+				case 0x00E0:
+					ops.push_back({ &op_00E0, instr});
+					break;
+				case 0x00EE:
+					ops.push_back({ &op_00EE, instr});
+					return;
+				}
+				break;
+			}
+			case 0x1000:
+				ops.push_back({&op_1NNN, instr});
+				return;
+			case 0x2000:
+				ops.push_back({&op_2NNN, instr});
+				return;
+			case 0x3000:
+				ops.push_back({&op_3XNN, instr});
+				return;
+			case 0x4000:
+				ops.push_back({&op_4XNN, instr});
+				return;
+			case 0x5000:
+				ops.push_back({&op_5XY0, instr});
+				return;
+			case 0x6000:
+				ops.push_back({&op_6XNN, instr});
+				break;
+			case 0x7000:
+				ops.push_back({&op_7XNN, instr});
+				break;
+			case 0x8000:
+				switch (opcode & 0x000F)
+				{
+				case 0x0000:
+					ops.push_back({&op_8XY0, instr});
+					break;
+				case 0x0001:	
+					if (Quirks::VFReset)
+						ops.push_back({&op_8XY1<true>, instr});
+					else
+						ops.push_back({&op_8XY1<false>, instr});
+					break;
+				case 0x0002:
+					if (Quirks::VFReset)
+						ops.push_back({&op_8XY2<true>, instr});
+					else
+						ops.push_back({&op_8XY2<false>, instr});
+					break;
+				case 0x0003:
+					if (Quirks::VFReset)
+						ops.push_back({&op_8XY3<true>, instr});
+					else
+						ops.push_back({&op_8XY3<false>, instr});
+					break;
+				case 0x0004:
+					ops.push_back({&op_8XY4, instr});
+					break;
+				case 0x0005:
+					ops.push_back({&op_8XY5, instr});
+					break;
+				case 0x0006:
+					if (Quirks::Shifting)
+						ops.push_back({&op_8XY6<true>, instr});
+					else
+						ops.push_back({&op_8XY6<false>, instr});
+					break;
+				case 0x0007:
+					ops.push_back({&op_8XY7, instr});
+					break;
+				case 0x000E:
+					if (Quirks::Shifting)
+						ops.push_back({&op_8XYE<true>, instr});
+					else
+						ops.push_back({&op_8XYE<false>, instr});
+					break;
+				}
+				break;
+			case 0x9000:
+				ops.push_back({&op_9XY0, instr});
+				return;
+			case 0xA000:
+				ops.push_back({&op_ANNN, instr});
+				break;
+			case 0xB000:
+				if (Quirks::Jumping)
+					ops.push_back({&op_BNNN<true>, instr});
+				else
+					ops.push_back({&op_BNNN<false>, instr});
+				return;
+			case 0xC000:
+				ops.push_back({&op_CXNN, instr});
+				break;
+			case 0xD000:
+				if (Quirks::Clipping)
+				{
+					switch (opcode & 0xF)
+					{
+					case 0:
+						ops.push_back({ &op_DXYN<true, 0>, instr });
+						break;
+					case 1:
+						ops.push_back({ &op_DXYN<true, 1>, instr });
+						break;
+					case 2:
+						ops.push_back({ &op_DXYN<true, 2>, instr });
+						break;
+					case 3:
+						ops.push_back({ &op_DXYN<true, 3>, instr });
+						break;
+					case 4:
+						ops.push_back({ &op_DXYN<true, 4>, instr });
+						break;
+					case 5:
+						ops.push_back({ &op_DXYN<true, 5>, instr });
+						break;
+					case 6:
+						ops.push_back({ &op_DXYN<true, 6>, instr });
+						break;
+					case 7:
+						ops.push_back({ &op_DXYN<true, 7>, instr });
+						break;
+					case 8:
+						ops.push_back({ &op_DXYN<true, 8>, instr });
+						break;
+					case 9:
+						ops.push_back({ &op_DXYN<true, 9>, instr });
+						break;
+					case 10:
+						ops.push_back({ &op_DXYN<true, 10>, instr });
+						break;
+					case 11:
+						ops.push_back({ &op_DXYN<true, 11>, instr });
+						break;
+					case 12:
+						ops.push_back({ &op_DXYN<true, 12>, instr });
+						break;
+					case 13:
+						ops.push_back({ &op_DXYN<true, 13>, instr });
+						break;
+					case 14:
+						ops.push_back({ &op_DXYN<true, 14>, instr });
+						break;
+					case 15:
+						ops.push_back({ &op_DXYN<true, 15>, instr });
+						break;
+					}
+				}
+				else
+				{
+					switch (opcode & 0xF)
+					{
+					case 0:
+						ops.push_back({ &op_DXYN<false, 0>, instr });
+						break;
+					case 1:
+						ops.push_back({ &op_DXYN<false, 1>, instr });
+						break;
+					case 2:
+						ops.push_back({ &op_DXYN<false, 2>, instr });
+						break;
+					case 3:
+						ops.push_back({ &op_DXYN<false, 3>, instr });
+						break;
+					case 4:
+						ops.push_back({ &op_DXYN<false, 4>, instr });
+						break;
+					case 5:
+						ops.push_back({ &op_DXYN<false, 5>, instr });
+						break;
+					case 6:
+						ops.push_back({ &op_DXYN<false, 6>, instr });
+						break;
+					case 7:
+						ops.push_back({ &op_DXYN<false, 7>, instr });
+						break;
+					case 8:
+						ops.push_back({ &op_DXYN<false, 8>, instr });
+						break;
+					case 9:
+						ops.push_back({ &op_DXYN<false, 9>, instr });
+						break;
+					case 10:
+						ops.push_back({ &op_DXYN<false, 10>, instr });
+						break;
+					case 11:
+						ops.push_back({ &op_DXYN<false, 11>, instr });
+						break;
+					case 12:
+						ops.push_back({ &op_DXYN<false, 12>, instr });
+						break;
+					case 13:
+						ops.push_back({ &op_DXYN<false, 13>, instr });
+						break;
+					case 14:
+						ops.push_back({ &op_DXYN<false, 14>, instr });
+						break;
+					case 15:
+						ops.push_back({ &op_DXYN<false, 15>, instr });
+						break;
+					}
+					break;
+			case 0xE000:
+				switch (opcode & 0x00FF)
+				{
+				case 0x009E:
+					ops.push_back({ &op_EX9E, instr });
+					return;
+				case 0x00A1:
+					ops.push_back({ &op_EXA1, instr });
+					return;
+				}
+				break;
+			case 0xF000:
+				switch (opcode & 0x00FF)
+				{
+				case 0x0007:
+					ops.push_back({ &op_FX07, instr });
+					break;
+				case 0x000A:
+					ops.push_back({ &op_FX0A, instr });
+					return;
+				case 0x001E:
+					ops.push_back({ &op_FX1E, instr });
+					break;
+				case 0x0015:
+					ops.push_back({ &op_FX15, instr });
+					break;
+				case 0x0018:
+					ops.push_back({ &op_FX18, instr });
+					break;
+				case 0x0029:
+					ops.push_back({ &op_FX29, instr });
+					break;
+					// Ending the block on memory store, because self-modifying code can modify the current block.
+				case 0x0033:
+					ops.push_back({ &op_FX33, instr });
+					return;
+				case 0x0055:
+					if (Quirks::MemoryIncrement)
+						ops.push_back({ &op_FX55<true>, instr });
+					else
+						ops.push_back({ &op_FX55<false>, instr });
+					return;
+				case 0x0065:
+					if (Quirks::MemoryIncrement)
+						ops.push_back({ &op_FX65<true>, instr });
+					else
+						ops.push_back({ &op_FX65<false>, instr });
+					break;
+				}
+				break;
+				}
+			}
+		}
+	}
+};

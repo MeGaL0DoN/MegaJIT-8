@@ -10,7 +10,7 @@ static ma_waveform waveForm;
 
 void sound_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
-	if (ChipCore::enableAudio && s.sound_timer > 0)
+	if (ChipCore::enableAudio && s.soundTimer > 0)
 		ma_waveform_read_pcm_frames(&waveForm, pOutput, frameCount, nullptr);
 }
 
