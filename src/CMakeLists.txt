@@ -22,12 +22,23 @@ add_executable(MegaJIT_8
         ChipCore.cpp
         ChipCore.h
         ChipEmitter.h
-        
-        ChipJITState.h
+        ChipJITCore.h 
+        ChipCachedCore.h 
+        ChipInterpretCore.h
         ChipState.cpp
         ChipState.h
-        ChipInterpretCore.h
-        ChipJITCore.h "ChipCachedCore.h" "ChipCachedState.h")
+        ChipJITState.h
+        ChipCachedState.h)
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT supported OUTPUT error)
+
+if (supported)
+    message(STATUS "IPO / LTO enabled")
+    set_property(TARGET MegaJIT_8 PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    message(STATUS "IPO / LTO not supported: <${error}>")
+endif()
 
 if (MSVC)
     set_target_properties(
