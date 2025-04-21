@@ -20,7 +20,7 @@ class ChipJITCore : public ChipCore
 public:
 	FORCE_INLINE uint64_t execute()
 	{
-		const auto& map { JIT.blockMap[s.pc] };
+		const auto& map { JIT.blockMap[s.pc & 0xFFF] };
 		return map.isValid ? executeBlock(map.block) : compileBlock();
 	}
 
@@ -111,7 +111,6 @@ private:
 		emitBlock();
 		c.emitEpilogue();
 
-		s.pc &= 0xFFF;
 		block.endPC = s.pc;
 		block.cacheSize = static_cast<uint32_t>(c.getCodeSize() - block.cacheOffset);
 

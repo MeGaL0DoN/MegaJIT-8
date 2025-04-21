@@ -21,9 +21,9 @@ struct Instruction
 
 void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
 {
-	for (auto& block : cache.blocks)
+	for (const auto& block : cache.blocks)
 	{
-		if (block.startPC <= endAddr && (block.endPC - 2) >= startAddr)
+		if (block.startPC <= endAddr && (block.endPC - 1) >= startAddr)
 			cache.blockMap[block.startPC].isValid = false;
 	}
 }
@@ -47,15 +47,18 @@ void op_2NNN(const Instruction& instr)
 }
 void op_3XNN(const Instruction& instr)
 {
-	if (s.V[instr.x] == instr.nn) s.pc += 2;
+	if (s.V[instr.x] == instr.nn) 
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_4XNN(const Instruction& instr)
 {
-	if (s.V[instr.x] != instr.nn) s.pc += 2;
+	if (s.V[instr.x] != instr.nn) 
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_5XY0(const Instruction& instr)
 {
-	if (s.V[instr.x] == s.V[instr.y]) s.pc += 2;
+	if (s.V[instr.x] == s.V[instr.y])
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_6XNN(const Instruction& instr)
 {
@@ -123,7 +126,8 @@ void op_8XYE(const Instruction& instr)
 
 void op_9XY0(const Instruction& instr)
 {
-	if (s.V[instr.x] != s.V[instr.y]) s.pc += 2;
+	if (s.V[instr.x] != s.V[instr.y]) 
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_ANNN(const Instruction& instr)
 {
@@ -196,11 +200,13 @@ void op_DXYN(const Instruction& instr)
 
 void op_EX9E(const Instruction& instr)
 {
-	if (s.keys[s.V[instr.x] & 0xF]) s.pc += 2;
+	if (s.keys[s.V[instr.x] & 0xF])
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_EXA1(const Instruction& instr)
 {
-	if (!s.keys[s.V[instr.x] & 0xF]) s.pc += 2;
+	if (!s.keys[s.V[instr.x] & 0xF])
+		s.pc = (s.pc + 2) & 0xFFF;
 }
 void op_FX07(const Instruction& instr)
 {
@@ -337,9 +343,8 @@ private:
 
 		auto& block { cache.blocks[map.block] };
 		block.cacheOffset = ops.size();
-		emitBlock(block);
 
-		s.pc &= 0xFFF;
+		emitBlock(block);
 		block.endPC = s.pc;
 
 		const auto* blockOps { &ops[block.cacheOffset] };

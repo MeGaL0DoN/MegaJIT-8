@@ -44,14 +44,14 @@ private:
 #define RAM_PTR(offset) byte[BASE + offsetof(ChipState, RAM) + offset]
 
 #ifdef _WIN32
-	static constexpr uint8_t MAX_ALLOC_REGS = 6;
+	static constexpr size_t MAX_ALLOC_REGS { 6 };
 #else
-	static constexpr uint8_t MAX_ALLOC_REGS = 5;
+	static constexpr size_t MAX_ALLOC_REGS { 5 };
 #endif
 
 	std::vector<uint8_t> allocatedRegs{};
-	bool IregAllocated{ false };
-	bool flagRegAllocated{ false };
+	bool IregAllocated { false };
+	bool flagRegAllocated { false };
 	uint64_t blockBranches { 0 };
 
 #define I_FULL_REG r15
@@ -60,32 +60,32 @@ private:
 	{
 		switch (num)
 		{
-			case 0: return bx;
-			case 1: return bp;
-			case 2: return r12w;
-			case 3: return r13w;
-			case 4: return r14w;
-			case 5: return di;
-			default: UNREACHABLE()
+		case 0: return bx;
+		case 1: return bp;
+		case 2: return r12w;
+		case 3: return r13w;
+		case 4: return r14w;
+		case 5: return di;
+		default: UNREACHABLE()
 		}
 	}
 
-	const Xbyak::Reg8* Vreg{ nullptr };
+	const Xbyak::Reg8* Vreg { nullptr };
 
-	inline bool GET_VREG(uint8_t num) 
+	inline bool GET_VREG(uint8_t num)
 	{
-		auto pos = std::find(allocatedRegs.begin(), allocatedRegs.end(), num);
+		const auto pos { std::find(allocatedRegs.begin(), allocatedRegs.end(), num) };
 
 		if (pos != allocatedRegs.end())
 		{
 			switch (std::distance(allocatedRegs.begin(), pos))
 			{
-				case 0: Vreg = &bl; break;
-				case 1: Vreg = &bpl; break;
-				case 2: Vreg = &r12b; break;
-				case 3: Vreg = &r13b; break;
-				case 4: Vreg = &r14b; break;
-				case 5: Vreg = &sil; break;
+			case 0: Vreg = &bl; break;
+			case 1: Vreg = &bpl; break;
+			case 2: Vreg = &r12b; break;
+			case 3: Vreg = &r13b; break;
+			case 4: Vreg = &r14b; break;
+			case 5: Vreg = &sil; break;
 			}
 
 			return true;
@@ -161,12 +161,15 @@ private:
 	template<bool toMem>
 	inline void store(int count)
 	{
-		movzx(rdx, I_REG);
+		movzx(rax, I_REG);
 
 		for (int i = 0; i <= count; i++)
 		{
-			lea(rax, ptr[rdx + i]);
-			and_(rax, 0xFFF);
+			if (i > 0)
+			{
+				inc(ax);
+				and_(ax, 0xFFF);
+			}
 
 			if constexpr (toMem)
 				MOV(RAM_PTR(rax), V_REG(i));
@@ -177,9 +180,9 @@ private:
 
 	static void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
 	{
-		for (auto& block : JIT.blocks)
+		for (const auto& block : JIT.blocks)
 		{
-			if (block.startPC <= endAddr && (block.endPC - 2) >= startAddr)
+			if (block.startPC <= endAddr && (block.endPC - 1) >= startAddr)
 				JIT.blockMap[block.startPC].isValid = false;
 		}
 	}
@@ -224,7 +227,7 @@ public:
 	static constexpr uint32_t MAX_CACHE_SIZE { 262144 };
 
 	std::array<uint8_t, 16> VRegUsage{};
-	uint8_t IRegUsage{ 0 };
+	uint8_t IRegUsage { 0 };
 
 	uint64_t instructions { 0 };
 
@@ -302,7 +305,7 @@ public:
 
 	FORCE_INLINE uint64_t execute(uint32_t offset) const
 	{
-		return reinterpret_cast<uint16_t(*)()>(const_cast<uint8_t*>(getCode()) + offset)();
+		return reinterpret_cast<uint32_t(*)()>(const_cast<uint8_t*>(getCode()) + offset)();
 	}
 
 	inline void emit00E0()
@@ -332,18 +335,13 @@ public:
 		}
 	}
 
-	//void setCodeOffset(size_t offset)
-	//{
-	//	setSize(offset);
-	//}
-
 	inline const uint8_t* getCodePtr() const { return getCode(); }
 	inline size_t getCodeSize() const { return getSize(); }
 
 	inline void clearCache() { resetSize(); }
 
 	void emitJumpLabel()
-	{		
+	{
 		L("@@");
 	}
 
@@ -358,7 +356,7 @@ public:
 
 	inline void emit1NNN(uint16_t addr)
 	{
-		mov(PC, addr & 0xFFF);
+		mov(PC, addr);
 	}
 
 	inline void emit2NNN(uint16_t addr)
@@ -367,7 +365,7 @@ public:
 		and_(rcx, 0xF);
 		mov(ax, PC);
 		mov(STACK_PTR, ax);
-		mov(PC, addr & 0xFFF);
+		mov(PC, addr);
 		inc(SP);
 	}
 
@@ -533,7 +531,8 @@ public:
 	}
 	inline void emit8XY6(uint8_t regX, uint8_t regY)
 	{
-		if (!Quirks::Shifting) emit8XY0(regX, regY);
+		if (!Quirks::Shifting)
+			emit8XY0(regX, regY);
 
 		if (regX == 0xF) // small optimization if operand is flag reg.
 			and_(FLAG_REG, 0x1);
@@ -557,7 +556,8 @@ public:
 
 	inline void emit8XYE(uint8_t regX, uint8_t regY)
 	{
-		if (!Quirks::Shifting) emit8XY0(regX, regY);
+		if (!Quirks::Shifting)
+			emit8XY0(regX, regY);
 
 		if (regX == 0xF) // small optimization if operand is flag reg.
 			shr(FLAG_REG, 7);
@@ -579,7 +579,6 @@ public:
 		mov(PC, val);
 		movzx(cx, Quirks::Jumping ? V_REG(regX) : V_REG(0));
 		add(PC, cx);
-		and_(PC, 0xFFF);
 	}
 
 	inline void emitCXNN(uint8_t regX, uint8_t val)
@@ -618,7 +617,9 @@ public:
 				if (i > 0) lea(rax, ptr[rax + i]);
 			}
 
-			and_(rax, 0xFFF);
+			if (i > 0)
+				and_(rax, 0xFFF);
+
 			movzx(rax, RAM_PTR(rax));
 
 			if (i > 0)
@@ -634,7 +635,7 @@ public:
 
 			mov(rdx, rax);
 			cmp(r9b, 56);
-			jbe(fullDraw); 
+			jbe(fullDraw);
 
 			lea(rcx, ptr[r9 - 56]);
 			shr(rdx, cl);
@@ -642,7 +643,7 @@ public:
 			if (!Quirks::Clipping)
 			{
 				mov(cl, 120);
-				sub(cl, r9b); 
+				sub(cl, r9b);
 				shl(rax, cl);
 				or_(rdx, rax);
 			}
@@ -663,7 +664,8 @@ public:
 			or_(FLAG_REG, al);
 			xor_(qword[rcx], rdx);
 
-			inc(r8b);
+			if (i != (height - 1))
+				inc(r8b);
 		}
 
 		L(loopEnd);
@@ -687,6 +689,7 @@ public:
 	{
 		movzx(cx, V_REG(regX));
 		add(I_REG, cx);
+		and_(I_REG, 0xFFF);
 	}
 
 	inline void emitFX29(uint8_t regX)
@@ -705,7 +708,6 @@ public:
 		shr(r8d, 12);
 		movzx(ecx, I_REG);
 		mov(edx, ecx);
-		and_(edx, 0xFFF);
 		mov(RAM_PTR(rdx), r8b);
 		imul(r8d, eax, 205);
 		shr(r8d, 11);
@@ -736,13 +738,21 @@ public:
 		emitBlockInvalidation(regX);
 
 		if (Quirks::MemoryIncrement)
+		{
 			add(I_REG, regX + 1);
+			and_(I_REG, 0xFFF);
+		}
 	}
 
 	inline void emitFX65(uint8_t regX)
 	{
 		store<false>(regX);
-		if (Quirks::MemoryIncrement) add(I_REG, regX + 1);
+
+		if (Quirks::MemoryIncrement)
+		{
+			add(I_REG, regX + 1);
+			and_(I_REG, 0xFFF);
+		}
 	}
 
 	inline void emitFX0A(uint8_t regX)
