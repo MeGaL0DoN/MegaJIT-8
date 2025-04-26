@@ -44,14 +44,14 @@ private:
 #define RAM_PTR(offset) byte[BASE + offsetof(ChipState, RAM) + offset]
 
 #ifdef _WIN32
-	static constexpr size_t MAX_ALLOC_REGS { 6 };
+	static constexpr size_t MAX_ALLOC_REGS { 7 };
 #else
+	// sil and dil are callee saved only in Windows calling convention.
 	static constexpr size_t MAX_ALLOC_REGS { 5 };
 #endif
 
 	std::vector<uint8_t> allocatedRegs{};
 	bool IregAllocated { false };
-	bool flagRegAllocated { false };
 	uint64_t blockBranches { 0 };
 
 #define I_FULL_REG r15
@@ -60,13 +60,14 @@ private:
 	{
 		switch (num)
 		{
-		case 0: return bx;
-		case 1: return bp;
-		case 2: return r12w;
-		case 3: return r13w;
-		case 4: return r14w;
-		case 5: return di;
-		default: UNREACHABLE()
+			case 0: return bx;
+			case 1: return bp;
+			case 2: return r12w;
+			case 3: return r13w;
+			case 4: return r14w;
+			case 5: return si;
+			case 6: return di;
+			default: UNREACHABLE()
 		}
 	}
 
@@ -80,12 +81,13 @@ private:
 		{
 			switch (std::distance(allocatedRegs.begin(), pos))
 			{
-			case 0: Vreg = &bl; break;
-			case 1: Vreg = &bpl; break;
-			case 2: Vreg = &r12b; break;
-			case 3: Vreg = &r13b; break;
-			case 4: Vreg = &r14b; break;
-			case 5: Vreg = &sil; break;
+				case 0: Vreg = &bl; break;
+				case 1: Vreg = &bpl; break;
+				case 2: Vreg = &r12b; break;
+				case 3: Vreg = &r13b; break;
+				case 4: Vreg = &r14b; break;
+				case 5: Vreg = &sil; break;
+				case 6: Vreg = &dil; break;
 			}
 
 			return true;
@@ -96,7 +98,7 @@ private:
 
 #define V_REG(num) (GET_VREG(num) ? (const Xbyak::Operand&)*Vreg : (const Xbyak::Operand&)REG_PTR(num))
 #define I_REG (IregAllocated ? (const Xbyak::Operand&)r15w : (const Xbyak::Operand&)I_REG_PTR)
-#define FLAG_REG (flagRegAllocated ? (const Xbyak::Operand&)bl : (const Xbyak::Operand&)REG_PTR(0xF))
+#define FLAG_REG V_REG(0xF)
 
 	template <typename Op>
 	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
@@ -205,7 +207,6 @@ private:
 		std::memset(VRegUsage.data(), 0, sizeof(VRegUsage));
 		IRegUsage = 0;
 		IregAllocated = false;
-		flagRegAllocated = false;
 		instructions = 0;
 		blockBranches = 0;
 	}
@@ -218,37 +219,41 @@ private:
 	inline void checkCPUSupport()
 	{
 		cpuCaps = Xbyak::util::Cpu();
-
 		AVXSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
 		SSE2Support = cpuCaps.has(Xbyak::util::Cpu::tSSE2);
 	}
 
 public:
 	static constexpr uint32_t MAX_CACHE_SIZE { 262144 };
+	static constexpr uint32_t ALLOC_THRESHOLD { 3 };
 
-	std::array<uint8_t, 16> VRegUsage{};
+	std::array<uint32_t, 16> VRegUsage{};
 	uint8_t IRegUsage { 0 };
 
 	uint64_t instructions { 0 };
 
 	void allocateRegs()
 	{
-		if (VRegUsage[0xF] >= 3)
+		std::vector<std::pair<uint8_t, uint32_t>> usageList{};
+		usageList.reserve(16);
+
+		for (int i = 0; i < 16; i++)
 		{
-			allocatedRegs.push_back(0xF);
-			flagRegAllocated = true;
+			if (VRegUsage[i] >= ALLOC_THRESHOLD)
+				usageList.push_back({ i, VRegUsage[i] });
 		}
 
-		for (int i = 0; i < 15; i++)
+		std::sort(usageList.begin(), usageList.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+
+		for (const auto [reg, _] : usageList)
 		{
-			if (VRegUsage[i] >= 3)
-			{
-				allocatedRegs.push_back(i);
-				if (allocatedRegs.size() == MAX_ALLOC_REGS) break;
-			}
+			allocatedRegs.push_back(reg);
+
+			if (allocatedRegs.size() == MAX_ALLOC_REGS)
+				break;
 		}
 
-		if (IRegUsage >= 3)
+		if (IRegUsage >= ALLOC_THRESHOLD)
 			IregAllocated = true;
 	}
 

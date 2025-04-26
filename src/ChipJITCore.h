@@ -71,7 +71,7 @@ private:
 private:
 	ChipEmitter c{};
 
-	static constexpr uint64_t BLOCK_MAX_INSTR = 64;
+	static constexpr uint64_t BLOCK_MAX_INSTR { 64 };
 	uint64_t instructionsPerBlock { 1 };
 
 	void initialize() override
@@ -238,7 +238,7 @@ private:
 				case 0x0033:
 					c.IRegUsage++;
 					c.VRegUsage[xReg]++;
-					break;
+					return;
 				case 0x0055:
 				case 0x0065:
 					c.IRegUsage++;
@@ -246,7 +246,9 @@ private:
 					for (int i = 0; i <= xReg; i++)
 						c.VRegUsage[i]++;
 
-					if ((opcode & 0x00FF) == 0x0055) return;
+					if ((opcode & 0x00FF) == 0x0055) 
+						return;
+
 					break;
 				}
 				break;
