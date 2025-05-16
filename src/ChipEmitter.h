@@ -42,6 +42,7 @@ private:
 #define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
 #define I_REG_PTR word[BASE + offsetof(ChipState, I)]
 #define RAM_PTR(offset) byte[BASE + offsetof(ChipState, RAM) + offset]
+#define SCREEN_PTR(offset) qword[BASE + offsetof(ChipState, screenBuffer) + (offset * sizeof(uint64_t))]
 
 #ifdef _WIN32
 	static constexpr size_t MAX_ALLOC_REGS { 7 };
@@ -212,15 +213,12 @@ private:
 	}
 
 	Xbyak::util::Cpu cpuCaps;
-
-	bool SSE2Support { false };
-	bool AVXSupport { false };
+	bool avxSupport { false };
 
 	inline void checkCPUSupport()
 	{
 		cpuCaps = Xbyak::util::Cpu();
-		AVXSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
-		SSE2Support = cpuCaps.has(Xbyak::util::Cpu::tSSE2);
+		avxSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
 	}
 
 public:
@@ -317,7 +315,7 @@ public:
 	{
 		lea(rcx, ptr[BASE + offsetof(ChipState, screenBuffer)]);
 
-		if (AVXSupport)
+		if (avxSupport)
 		{
 			vxorpd(ymm0, ymm0, ymm0);
 
@@ -326,17 +324,12 @@ public:
 
 			vzeroupper();
 		}
-		else if (SSE2Support)
+		else
 		{
 			pxor(xmm0, xmm0);
 
 			for (int i = 0; i < 32; i += 2)
 				movdqu(ptr[rcx + i * 8], xmm0);
-		}
-		else
-		{
-			for (int i = 0; i < 32; i++)
-				mov(qword[rcx + i * 8], 0);
 		}
 	}
 
@@ -603,32 +596,36 @@ public:
 
 		Xbyak::Label loopEnd;
 
+		mov(cl, V_REG(regX));
+		and_(ecx, (ChipState::SCRWidth - 1));
+
 		mov(r8b, V_REG(regY));
-		and_(r8, (ChipState::SCRHeight - 1));
+		and_(r8d, (ChipState::SCRHeight - 1));
 
-		mov(r9b, V_REG(regX));
-		and_(r9, (ChipState::SCRWidth - 1));
-
+		movzx(r9, I_REG);
 		mov(FLAG_REG, 0);
 
 		for (int i = 0; i < height; i++)
 		{
-			Xbyak::Label drawXoring, fullDraw;
+			movzx(rdx, RAM_PTR(r9));
+			shl(rdx, ChipState::SCRWidth - 8);
 
-			if (IregAllocated) lea(rax, ptr[I_FULL_REG + i]);
+			if (Quirks::Clipping)
+				shr(rdx, cl);
 			else
+				ror(rdx, cl);
+
+			test(SCREEN_PTR(r8), rdx);
+			setnz(al);
+			or_(FLAG_REG, al);
+			xor_(SCREEN_PTR(r8), rdx);
+
+			if (i != (height - 1))
 			{
-				movzx(rax, I_REG_PTR);
-				if (i > 0) lea(rax, ptr[rax + i]);
-			}
+				inc(r8b);
+				inc(r9w);
+				and_(r9w, 0xFFF);
 
-			if (i > 0)
-				and_(rax, 0xFFF);
-
-			movzx(rax, RAM_PTR(rax));
-
-			if (i > 0)
-			{
 				if (Quirks::Clipping)
 				{
 					cmp(r8b, ChipState::SCRHeight);
@@ -637,40 +634,6 @@ public:
 				else
 					and_(r8b, (ChipState::SCRHeight - 1));
 			}
-
-			mov(rdx, rax);
-			cmp(r9b, 56);
-			jbe(fullDraw);
-
-			lea(rcx, ptr[r9 - 56]);
-			shr(rdx, cl);
-
-			if (!Quirks::Clipping)
-			{
-				mov(cl, 120);
-				sub(cl, r9b);
-				shl(rax, cl);
-				or_(rdx, rax);
-			}
-
-			jmp(drawXoring);
-			L(fullDraw);
-
-			mov(cl, 56);
-			sub(cl, r9b);
-			shl(rdx, cl);
-
-			L(drawXoring);
-
-			lea(rcx, ptr[BASE + offsetof(ChipState, screenBuffer) + (r8 * sizeof(uint64_t))]);
-
-			test(qword[rcx], rdx);
-			setnz(al);
-			or_(FLAG_REG, al);
-			xor_(qword[rcx], rdx);
-
-			if (i != (height - 1))
-				inc(r8b);
 		}
 
 		L(loopEnd);
