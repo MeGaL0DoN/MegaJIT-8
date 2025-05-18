@@ -202,6 +202,12 @@ private:
 				case 0x000E:
 					c.VRegUsage[xReg]++;
 					c.VRegUsage[0xF]++;
+
+					if (!Quirks::Shifting)
+					{
+						c.VRegUsage[xReg]++;
+						c.VRegUsage[yReg]++;
+					}
 					break;
 				}
 				break;
@@ -220,8 +226,8 @@ private:
 			case 0xD000:
 				c.VRegUsage[xReg]++; 
 				c.VRegUsage[yReg]++; 
-				c.VRegUsage[0xF] += (opcode & 0x000F); // height
-				c.IRegUsage += (opcode & 0x000F);
+				c.VRegUsage[0xF] += (opcode & 0xF); // height
+				c.IRegUsage += (opcode & 0xF);
 				break;
 			case 0xF000:
 				switch (opcode & 0x00FF)
@@ -241,7 +247,7 @@ private:
 					return;
 				case 0x0055:
 				case 0x0065:
-					c.IRegUsage++;
+					c.IRegUsage += (Quirks::MemoryIncrement ? 3 : 1);
 
 					for (int i = 0; i <= xReg; i++)
 						c.VRegUsage[i]++;

@@ -37,7 +37,7 @@ private:
 
 #define SP word[BASE + offsetof(ChipState, sp)]
 #define PC word[BASE + offsetof(ChipState, pc)]
-#define STACK_PTR word[BASE + offsetof(ChipState, stack) + (rcx * sizeof(uint16_t))]
+#define STACK_PTR(offset) word[BASE + offsetof(ChipState, stack) + (offset * sizeof(uint16_t))]
 #define KEY(offset) byte[BASE + offsetof(ChipState, keys) + offset]
 #define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
 #define I_REG_PTR word[BASE + offsetof(ChipState, I)]
@@ -164,21 +164,24 @@ private:
 	template<bool toMem>
 	inline void store(int count)
 	{
-		movzx(rax, I_REG);
+		movzx(eax, I_REG);
 
 		for (int i = 0; i <= count; i++)
 		{
-			if (i > 0)
-			{
-				inc(ax);
-				and_(ax, 0xFFF);
-			}
-
 			if constexpr (toMem)
 				MOV(RAM_PTR(rax), V_REG(i));
 			else
 				MOV(V_REG(i), RAM_PTR(rax));
+
+			if (i != count || Quirks::MemoryIncrement)
+			{
+				inc(eax);
+				and_(eax, 0xFFF);
+			}
 		}
+
+		if (Quirks::MemoryIncrement)
+			mov(I_REG, ax);
 	}
 
 	static void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
@@ -348,7 +351,7 @@ public:
 		dec(SP);
 		mov(cx, SP);
 		and_(rcx, 0xF);
-		mov(cx, STACK_PTR);
+		mov(cx, STACK_PTR(rcx));
 		mov(PC, cx);
 	}
 
@@ -362,7 +365,7 @@ public:
 		mov(cx, SP);
 		and_(rcx, 0xF);
 		mov(ax, PC);
-		mov(STACK_PTR, ax);
+		mov(STACK_PTR(rcx), ax);
 		mov(PC, addr);
 		inc(SP);
 	}
@@ -530,7 +533,7 @@ public:
 	inline void emit8XY6(uint8_t regX, uint8_t regY)
 	{
 		if (!Quirks::Shifting)
-			emit8XY0(regX, regY);
+			MOV(V_REG(regX), V_REG(regY));
 
 		if (regX == 0xF) // small optimization if operand is flag reg.
 			and_(FLAG_REG, 0x1);
@@ -555,7 +558,7 @@ public:
 	inline void emit8XYE(uint8_t regX, uint8_t regY)
 	{
 		if (!Quirks::Shifting)
-			emit8XY0(regX, regY);
+			MOV(V_REG(regX), V_REG(regY));
 
 		if (regX == 0xF) // small optimization if operand is flag reg.
 			shr(FLAG_REG, 7);
@@ -622,17 +625,17 @@ public:
 
 			if (i != (height - 1))
 			{
-				inc(r8b);
-				inc(r9w);
-				and_(r9w, 0xFFF);
+				inc(r8d);
+				inc(r9d);
+				and_(r9d, 0xFFF);
 
 				if (Quirks::Clipping)
 				{
-					cmp(r8b, ChipState::SCRHeight);
+					cmp(r8d, ChipState::SCRHeight);
 					jae(loopEnd, T_NEAR);
 				}
 				else
-					and_(r8b, (ChipState::SCRHeight - 1));
+					and_(r8d, (ChipState::SCRHeight - 1));
 			}
 		}
 
@@ -704,23 +707,11 @@ public:
 	{
 		store<true>(regX);
 		emitBlockInvalidation(regX);
-
-		if (Quirks::MemoryIncrement)
-		{
-			add(I_REG, regX + 1);
-			and_(I_REG, 0xFFF);
-		}
 	}
 
 	inline void emitFX65(uint8_t regX)
 	{
 		store<false>(regX);
-
-		if (Quirks::MemoryIncrement)
-		{
-			add(I_REG, regX + 1);
-			and_(I_REG, 0xFFF);
-		}
 	}
 
 	inline void emitFX0A(uint8_t regX)
