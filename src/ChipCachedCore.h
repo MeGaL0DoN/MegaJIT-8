@@ -12,11 +12,10 @@ ChipCachedState cache{};
 
 struct Instruction
 {
-	uint16_t nnn;
-	uint8_t nn;
-	uint8_t n;
 	uint8_t x;
 	uint8_t y;
+	uint8_t nn;
+	uint16_t nnn;
 };
 
 void invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
@@ -34,7 +33,7 @@ void op_00E0(const Instruction& instr)
 }
 void op_00EE(const Instruction& instr)
 {
-	s.pc = s.stack[(--s.sp) & 0xF];
+	s.pc = s.stack[--s.sp];
 }
 void op_1NNN(const Instruction& instr)
 {
@@ -42,7 +41,7 @@ void op_1NNN(const Instruction& instr)
 }
 void op_2NNN(const Instruction& instr)
 {
-	s.stack[(s.sp++) & 0xF] = s.pc;
+	s.stack[s.sp++] = s.pc;
 	s.pc = instr.nnn;
 }
 void op_3XNN(const Instruction& instr)
@@ -155,23 +154,26 @@ void op_DXYN(const Instruction& instr)
 		return;
 	}
 
-	uint8_t Xpos = s.V[instr.x] & (ChipState::SCRWidth - 1);
-	uint8_t Ypos = s.V[instr.y] & (ChipState::SCRHeight - 1);
+	const uint8_t Xpos = s.V[instr.x] & (ChipState::SCR_WIDTH - 1);
+	uint8_t Ypos = s.V[instr.y] & (ChipState::SCR_HEIGHT - 1);
 
 	s.V[0xF] = 0;
 	const bool partialDraw { Xpos > 56 };
 
 	for (int i = 0; i < height; i++)
 	{
-		const uint8_t spriteRow { s.RAM[(s.I + i) & 0xFFF] };
+		const uint8_t spriteRow { s.RAM[(s.I + i) ] };
 
-		if constexpr (clipping)
+		if constexpr (height != 1)
 		{
-			if (Ypos >= ChipState::SCRHeight)
-				break;
+			if constexpr (clipping)
+			{
+				if (Ypos >= ChipState::SCR_HEIGHT)
+					break;
+			}
+			else
+				Ypos &= (ChipState::SCR_HEIGHT - 1);
 		}
-		else
-			Ypos &= (ChipState::SCRHeight - 1);
 
 		uint64_t spriteMask;
 
@@ -189,7 +191,7 @@ void op_DXYN(const Instruction& instr)
 		}
 		else
 			spriteMask = static_cast<uint64_t>(spriteRow) << (63 - Xpos - 7);
-
+			
 		uint64_t& screenRow { s.screenBuffer[Ypos] };
 		s.V[0xF] |= ((screenRow & spriteMask) != 0);
 
@@ -277,13 +279,13 @@ public:
 	FORCE_INLINE uint64_t execute()
 	{
 		const auto& map { cache.blockMap[s.pc] };
-		return map.isValid ? executeBlock(map.block) : compileBlock();
+		return map.isValid ? executeBlock(cache.blocks[map.block]) : compileBlock();
 	}
 
 	void clearCache()
 	{
 		cache.reset();
-		ops.clear();
+		buf.clear();
 	}
 
 	void setSlowMode(bool enable)
@@ -299,7 +301,7 @@ private:
 		Instruction instr;
 	};
 
-	std::vector<CacheOp> ops{};
+	std::vector<CacheOp> buf{};
 
 	void initialize() override
 	{
@@ -307,17 +309,16 @@ private:
 		clearCache();
 	}
 
-	FORCE_INLINE uint64_t executeBlock(int16_t ind)
+	FORCE_INLINE uint64_t executeBlock(const CacheBlock& block)
 	{
-		const auto& block { cache.blocks[ind] };
-		const auto* blockOps { &ops[block.cacheOffset] };
-		const uint64_t instrCount { block.instrCount };
-
 		s.pc = block.endPC;
+
+		const auto* blockBuf { &buf[block.cacheOffset] };
+		const auto instrCount { block.instrCount };
 
 		for (int i = 0; i < instrCount; i++)
 		{
-			const auto& op { blockOps[i] };
+			const auto& op { blockBuf[i] };
 			op.func(op.instr);
 		}
 
@@ -328,7 +329,7 @@ private:
 	{
 		constexpr size_t CACHE_CLEAR_THRESHOLD { 16384 };
 
-		if (ops.size() >= CACHE_CLEAR_THRESHOLD)
+		if (buf.size() >= CACHE_CLEAR_THRESHOLD)
 			clearCache();
 
 		s.pc &= 0xFFF;
@@ -342,24 +343,16 @@ private:
 		}
 
 		auto& block { cache.blocks[map.block] };
-		block.cacheOffset = ops.size();
+		block.cacheOffset = buf.size();
 
 		emitBlock(block);
 		block.endPC = s.pc;
 
-		const auto* blockOps { &ops[block.cacheOffset] };
-
-		for (int i = 0; i < block.instrCount; i++)
-		{
-			const auto& op { blockOps[i] };
-			op.func(op.instr);
-		}
-
-		return block.instrCount;
+		return executeBlock(block);
 	}
 
 	static constexpr uint64_t BLOCK_MAX_INSTR { 64 };
-	uint64_t instructionsPerBlock { 1 };
+	uint64_t instructionsPerBlock { BLOCK_MAX_INSTR };
 
 	inline void emitBlock(CacheBlock& block)
 	{
@@ -372,11 +365,10 @@ private:
 
 			Instruction instr
 			{
-				static_cast<uint16_t>(opcode & 0xFFF), 
-				static_cast<uint8_t>(opcode & 0xFF), 
-				static_cast<uint8_t>(opcode & 0xF),
 				static_cast<uint8_t>((opcode & 0x0F00) >> 8),
-				static_cast<uint8_t>((opcode & 0x00F0) >> 4)
+				static_cast<uint8_t>((opcode & 0x00F0) >> 4),
+				static_cast<uint8_t>(opcode & 0xFF),
+				static_cast<uint16_t>(opcode & 0xFFF), 
 			};
 
 			block.instrCount++;
@@ -388,96 +380,96 @@ private:
 				switch (opcode & 0x0FFF)
 				{
 				case 0x00E0:
-					ops.push_back({ &op_00E0, instr});
+					buf.push_back({ &op_00E0, instr});
 					break;
 				case 0x00EE:
-					ops.push_back({ &op_00EE, instr});
+					buf.push_back({ &op_00EE, instr});
 					return;
 				}
 				break;
 			}
 			case 0x1000:
-				ops.push_back({&op_1NNN, instr});
+				buf.push_back({&op_1NNN, instr});
 				return;
 			case 0x2000:
-				ops.push_back({&op_2NNN, instr});
+				buf.push_back({&op_2NNN, instr});
 				return;
 			case 0x3000:
-				ops.push_back({&op_3XNN, instr});
+				buf.push_back({&op_3XNN, instr});
 				return;
 			case 0x4000:
-				ops.push_back({&op_4XNN, instr});
+				buf.push_back({&op_4XNN, instr});
 				return;
 			case 0x5000:
-				ops.push_back({&op_5XY0, instr});
+				buf.push_back({&op_5XY0, instr});
 				return;
 			case 0x6000:
-				ops.push_back({&op_6XNN, instr});
+				buf.push_back({&op_6XNN, instr});
 				break;
 			case 0x7000:
-				ops.push_back({&op_7XNN, instr});
+				buf.push_back({&op_7XNN, instr});
 				break;
 			case 0x8000:
 				switch (opcode & 0x000F)
 				{
 				case 0x0000:
-					ops.push_back({&op_8XY0, instr});
+					buf.push_back({&op_8XY0, instr});
 					break;
 				case 0x0001:	
 					if (Quirks::VFReset)
-						ops.push_back({&op_8XY1<true>, instr});
+						buf.push_back({&op_8XY1<true>, instr});
 					else
-						ops.push_back({&op_8XY1<false>, instr});
+						buf.push_back({&op_8XY1<false>, instr});
 					break;
 				case 0x0002:
 					if (Quirks::VFReset)
-						ops.push_back({&op_8XY2<true>, instr});
+						buf.push_back({&op_8XY2<true>, instr});
 					else
-						ops.push_back({&op_8XY2<false>, instr});
+						buf.push_back({&op_8XY2<false>, instr});
 					break;
 				case 0x0003:
 					if (Quirks::VFReset)
-						ops.push_back({&op_8XY3<true>, instr});
+						buf.push_back({&op_8XY3<true>, instr});
 					else
-						ops.push_back({&op_8XY3<false>, instr});
+						buf.push_back({&op_8XY3<false>, instr});
 					break;
 				case 0x0004:
-					ops.push_back({&op_8XY4, instr});
+					buf.push_back({&op_8XY4, instr});
 					break;
 				case 0x0005:
-					ops.push_back({&op_8XY5, instr});
+					buf.push_back({&op_8XY5, instr});
 					break;
 				case 0x0006:
 					if (Quirks::Shifting)
-						ops.push_back({&op_8XY6<true>, instr});
+						buf.push_back({&op_8XY6<true>, instr});
 					else
-						ops.push_back({&op_8XY6<false>, instr});
+						buf.push_back({&op_8XY6<false>, instr});
 					break;
 				case 0x0007:
-					ops.push_back({&op_8XY7, instr});
+					buf.push_back({&op_8XY7, instr});
 					break;
 				case 0x000E:
 					if (Quirks::Shifting)
-						ops.push_back({&op_8XYE<true>, instr});
+						buf.push_back({&op_8XYE<true>, instr});
 					else
-						ops.push_back({&op_8XYE<false>, instr});
+						buf.push_back({&op_8XYE<false>, instr});
 					break;
 				}
 				break;
 			case 0x9000:
-				ops.push_back({&op_9XY0, instr});
+				buf.push_back({&op_9XY0, instr});
 				return;
 			case 0xA000:
-				ops.push_back({&op_ANNN, instr});
+				buf.push_back({&op_ANNN, instr});
 				break;
 			case 0xB000:
 				if (Quirks::Jumping)
-					ops.push_back({&op_BNNN<true>, instr});
+					buf.push_back({&op_BNNN<true>, instr});
 				else
-					ops.push_back({&op_BNNN<false>, instr});
+					buf.push_back({&op_BNNN<false>, instr});
 				return;
 			case 0xC000:
-				ops.push_back({&op_CXNN, instr});
+				buf.push_back({&op_CXNN, instr});
 				break;
 			case 0xD000:
 				if (Quirks::Clipping)
@@ -485,52 +477,52 @@ private:
 					switch (opcode & 0xF)
 					{
 					case 0:
-						ops.push_back({ &op_DXYN<true, 0>, instr });
+						buf.push_back({ &op_DXYN<true, 0>, instr });
 						break;
 					case 1:
-						ops.push_back({ &op_DXYN<true, 1>, instr });
+						buf.push_back({ &op_DXYN<true, 1>, instr });
 						break;
 					case 2:
-						ops.push_back({ &op_DXYN<true, 2>, instr });
+						buf.push_back({ &op_DXYN<true, 2>, instr });
 						break;
 					case 3:
-						ops.push_back({ &op_DXYN<true, 3>, instr });
+						buf.push_back({ &op_DXYN<true, 3>, instr });
 						break;
 					case 4:
-						ops.push_back({ &op_DXYN<true, 4>, instr });
+						buf.push_back({ &op_DXYN<true, 4>, instr });
 						break;
 					case 5:
-						ops.push_back({ &op_DXYN<true, 5>, instr });
+						buf.push_back({ &op_DXYN<true, 5>, instr });
 						break;
 					case 6:
-						ops.push_back({ &op_DXYN<true, 6>, instr });
+						buf.push_back({ &op_DXYN<true, 6>, instr });
 						break;
 					case 7:
-						ops.push_back({ &op_DXYN<true, 7>, instr });
+						buf.push_back({ &op_DXYN<true, 7>, instr });
 						break;
 					case 8:
-						ops.push_back({ &op_DXYN<true, 8>, instr });
+						buf.push_back({ &op_DXYN<true, 8>, instr });
 						break;
 					case 9:
-						ops.push_back({ &op_DXYN<true, 9>, instr });
+						buf.push_back({ &op_DXYN<true, 9>, instr });
 						break;
 					case 10:
-						ops.push_back({ &op_DXYN<true, 10>, instr });
+						buf.push_back({ &op_DXYN<true, 10>, instr });
 						break;
 					case 11:
-						ops.push_back({ &op_DXYN<true, 11>, instr });
+						buf.push_back({ &op_DXYN<true, 11>, instr });
 						break;
 					case 12:
-						ops.push_back({ &op_DXYN<true, 12>, instr });
+						buf.push_back({ &op_DXYN<true, 12>, instr });
 						break;
 					case 13:
-						ops.push_back({ &op_DXYN<true, 13>, instr });
+						buf.push_back({ &op_DXYN<true, 13>, instr });
 						break;
 					case 14:
-						ops.push_back({ &op_DXYN<true, 14>, instr });
+						buf.push_back({ &op_DXYN<true, 14>, instr });
 						break;
 					case 15:
-						ops.push_back({ &op_DXYN<true, 15>, instr });
+						buf.push_back({ &op_DXYN<true, 15>, instr });
 						break;
 					}
 				}
@@ -539,63 +531,64 @@ private:
 					switch (opcode & 0xF)
 					{
 					case 0:
-						ops.push_back({ &op_DXYN<false, 0>, instr });
+						buf.push_back({ &op_DXYN<false, 0>, instr });
 						break;
 					case 1:
-						ops.push_back({ &op_DXYN<false, 1>, instr });
+						buf.push_back({ &op_DXYN<false, 1>, instr });
 						break;
 					case 2:
-						ops.push_back({ &op_DXYN<false, 2>, instr });
+						buf.push_back({ &op_DXYN<false, 2>, instr });
 						break;
 					case 3:
-						ops.push_back({ &op_DXYN<false, 3>, instr });
+						buf.push_back({ &op_DXYN<false, 3>, instr });
 						break;
 					case 4:
-						ops.push_back({ &op_DXYN<false, 4>, instr });
+						buf.push_back({ &op_DXYN<false, 4>, instr });
 						break;
 					case 5:
-						ops.push_back({ &op_DXYN<false, 5>, instr });
+						buf.push_back({ &op_DXYN<false, 5>, instr });
 						break;
 					case 6:
-						ops.push_back({ &op_DXYN<false, 6>, instr });
+						buf.push_back({ &op_DXYN<false, 6>, instr });
 						break;
 					case 7:
-						ops.push_back({ &op_DXYN<false, 7>, instr });
+						buf.push_back({ &op_DXYN<false, 7>, instr });
 						break;
 					case 8:
-						ops.push_back({ &op_DXYN<false, 8>, instr });
+						buf.push_back({ &op_DXYN<false, 8>, instr });
 						break;
 					case 9:
-						ops.push_back({ &op_DXYN<false, 9>, instr });
+						buf.push_back({ &op_DXYN<false, 9>, instr });
 						break;
 					case 10:
-						ops.push_back({ &op_DXYN<false, 10>, instr });
+						buf.push_back({ &op_DXYN<false, 10>, instr });
 						break;
 					case 11:
-						ops.push_back({ &op_DXYN<false, 11>, instr });
+						buf.push_back({ &op_DXYN<false, 11>, instr });
 						break;
 					case 12:
-						ops.push_back({ &op_DXYN<false, 12>, instr });
+						buf.push_back({ &op_DXYN<false, 12>, instr });
 						break;
 					case 13:
-						ops.push_back({ &op_DXYN<false, 13>, instr });
+						buf.push_back({ &op_DXYN<false, 13>, instr });
 						break;
 					case 14:
-						ops.push_back({ &op_DXYN<false, 14>, instr });
+						buf.push_back({ &op_DXYN<false, 14>, instr });
 						break;
 					case 15:
-						ops.push_back({ &op_DXYN<false, 15>, instr });
+						buf.push_back({ &op_DXYN<false, 15>, instr });
 						break;
 					}
-					break;
+				}
+				break;
 			case 0xE000:
 				switch (opcode & 0x00FF)
 				{
 				case 0x009E:
-					ops.push_back({ &op_EX9E, instr });
+					buf.push_back({ &op_EX9E, instr });
 					return;
 				case 0x00A1:
-					ops.push_back({ &op_EXA1, instr });
+					buf.push_back({ &op_EXA1, instr });
 					return;
 				}
 				break;
@@ -603,40 +596,39 @@ private:
 				switch (opcode & 0x00FF)
 				{
 				case 0x0007:
-					ops.push_back({ &op_FX07, instr });
+					buf.push_back({ &op_FX07, instr });
 					break;
 				case 0x000A:
-					ops.push_back({ &op_FX0A, instr });
+					buf.push_back({ &op_FX0A, instr });
 					return;
 				case 0x001E:
-					ops.push_back({ &op_FX1E, instr });
+					buf.push_back({ &op_FX1E, instr });
 					break;
 				case 0x0015:
-					ops.push_back({ &op_FX15, instr });
+					buf.push_back({ &op_FX15, instr });
 					break;
 				case 0x0018:
-					ops.push_back({ &op_FX18, instr });
+					buf.push_back({ &op_FX18, instr });
 					break;
 				case 0x0029:
-					ops.push_back({ &op_FX29, instr });
+					buf.push_back({ &op_FX29, instr });
 					break;
 					// Ending the block on memory store, because self-modifying code can modify the current block.
 				case 0x0033:
-					ops.push_back({ &op_FX33, instr });
+					buf.push_back({ &op_FX33, instr });
 					return;
 				case 0x0055:
 					if (Quirks::MemoryIncrement)
-						ops.push_back({ &op_FX55<true>, instr });
+						buf.push_back({ &op_FX55<true>, instr });
 					else
-						ops.push_back({ &op_FX55<false>, instr });
+						buf.push_back({ &op_FX55<false>, instr });
 					return;
 				case 0x0065:
 					if (Quirks::MemoryIncrement)
-						ops.push_back({ &op_FX65<true>, instr });
+						buf.push_back({ &op_FX65<true>, instr });
 					else
-						ops.push_back({ &op_FX65<false>, instr });
+						buf.push_back({ &op_FX65<false>, instr });
 					break;
-				}
 				break;
 				}
 			}

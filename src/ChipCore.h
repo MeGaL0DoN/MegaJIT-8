@@ -10,24 +10,24 @@ extern ChipState s;
 class ChipCore
 {
 public:
-	static inline bool enableAudio;
+	static inline bool enableAudio { false };
 	static void initAudio();
 	static void setVolume(double val);
 
-	bool loadROM(const std::filesystem::path& path)
+	bool loadROM(std::istream& is)
 	{
-		std::ifstream ifs { path, std::ios::binary | std::ios::ate };
-		if (!ifs) return false;
+		if (!is) return false;
 
-		const std::ifstream::pos_type size { ifs.tellg() };
+		is.seekg(0, std::ios::end);
+		const std::ifstream::pos_type size { is.tellg() };
 
-		if (size <= sizeof(s.RAM) - 0x200)
+		if (size <= (ChipState::RAM_SIZE - 0x200))
 		{
 			initialize();
 			romLoaded = true;
 
-			ifs.seekg(0, std::ios::beg);
-			ifs.read(reinterpret_cast<char*>(&s.RAM[0x200]), size);
+			is.seekg(0, std::ios::beg);
+			is.read(reinterpret_cast<char*>(&s.RAM[0x200]), size);
 
 			return true;
 		}
@@ -37,7 +37,7 @@ public:
 
 	bool isRomLoaded() { return romLoaded; }
 
-	const std::array<uint64_t, ChipState::SCRHeight>& getScreenBuffer() { return s.screenBuffer; }
+	const std::array<uint64_t, ChipState::SCR_HEIGHT>& getScreenBuffer() { return s.screenBuffer; }
 	inline bool awaitingKeyPress() { return s.inputReg != nullptr; }
 
 	inline void setKey(uint8_t key, bool isPressed)

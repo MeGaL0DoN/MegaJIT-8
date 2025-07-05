@@ -35,7 +35,7 @@ public:
 				std::memset(s.screenBuffer.data(), 0, sizeof(s.screenBuffer));
 				break;
 			case 0x00EE: 
-				s.pc = s.stack[(--s.sp) & 0xF];
+				s.pc = s.stack[--s.sp];
 				break;
 			}
 			break;
@@ -44,7 +44,7 @@ public:
 			s.pc = nnn;
 			break;  
 		case 0x2000:
-			s.stack[(s.sp++) & 0xF] = s.pc;
+			s.stack[s.sp++] = s.pc;
 			s.pc = nnn;
 			break;
 		case 0x3000:
@@ -139,7 +139,7 @@ public:
 			regX = rngDistr(rngEng) & nn;
 			break;
 		case 0xD000: 
-			drawSprite(regX & (ChipState::SCRWidth - 1), regY & (ChipState::SCRHeight - 1), n);
+			drawSprite(regX & (ChipState::SCR_WIDTH - 1), regY & (ChipState::SCR_HEIGHT - 1), n);
 			break;
 		case 0xE000:
 			switch (nn)
@@ -234,11 +234,11 @@ private:
 
 			if (Quirks::Clipping)
 			{
-				if (Ypos >= ChipState::SCRHeight)
+				if (Ypos >= ChipState::SCR_HEIGHT)
 					break;
 			}
 			else
-				Ypos &= (ChipState::SCRHeight - 1);
+				Ypos &= (ChipState::SCR_HEIGHT - 1);
 
 			uint64_t spriteMask;
 

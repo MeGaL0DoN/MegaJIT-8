@@ -366,5 +366,6 @@ FodyWeavers.xsd
 cmake-build-debug/
 cmake-build-release/
 cmake-build-release-clang/
+cmake-build-debug-clang/
 cmake-build-release-mingw/
 cmake-build-release-msvc/

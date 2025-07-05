@@ -28,7 +28,7 @@ add_executable(MegaJIT_8
         ChipState.cpp
         ChipState.h
         ChipJITState.h
-        ChipCachedState.h)
+        ChipCachedState.h )
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)

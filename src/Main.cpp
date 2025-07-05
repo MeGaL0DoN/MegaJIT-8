@@ -8,6 +8,7 @@
 
 #include <array>
 #include <map>
+#include <string_view>
 #include <sstream>
 #include <iostream>   
 #include <filesystem>
@@ -47,20 +48,20 @@ CHIPCore currentCore()
     UNREACHABLE();
 }
 
-std::thread cpuThread;
-std::atomic<bool> CPUThreadRunning { false };
+std::thread coreThread;
+std::atomic<bool> coreThreadRunning { false };
 uint64_t executedInstructions { 0 };
 
-bool unlimitedMode { false };
+bool unlimitedMode { true };
 
-int IPF { 9 };
+int IPF { 10 };
 bool paused { false };
 
 bool enableRainbow { false };
 Shader pixelShader;
 uint32_t chipTexture;
 
-int viewport_width, viewport_height;
+int viewportWidth, viewportHeight;
 int menuBarHeight;
 GLFWwindow* window;
 
@@ -74,7 +75,7 @@ bool fileDialogOpen { false };
 
 const std::filesystem::path defaultPath { std::filesystem::current_path() };
 constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
-constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x64 Assembly"), STR("txt")} };
+constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x86-64 Assembly"), STR("txt")} };
 
 std::string instrPerSecondStr {"Instructions per second: 0.000 MIPS"};
 
@@ -88,16 +89,16 @@ std::string toMIPSstring(uint64_t instr)
     return oss.str();
 }
 
-std::array<uint8_t, ChipState::SCRHeight * ChipState::SCRWidth> textureBuf;
+std::array<uint8_t, ChipState::SCR_HEIGHT * ChipState::SCR_WIDTH> textureBuf;
 
 void draw()
 {
     const auto& screenBuf { chipCore->getScreenBuffer() };
 
-    for (int i = 0; i < ChipState::SCRWidth * ChipState::SCRHeight; i++)
+    for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
         textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
 
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCRWidth, ChipState::SCRHeight, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 }
 
@@ -137,13 +138,13 @@ void setBuffers()
     glGenTextures(1, &chipTexture);
     glBindTexture(GL_TEXTURE_2D, chipTexture);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ChipState::SCRWidth, ChipState::SCRHeight, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     glGenerateMipmap(GL_TEXTURE_2D);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    pixelShader = Shader(resources::vertexShader, resources::fragmentShader);
+    pixelShader = Shader(Resources::VERTEX_SHADER, Resources::FRAGMENT_SHADER);
     pixelShader.use();
 
     constexpr std::array<float, 4> whiteColor { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -156,11 +157,11 @@ void setBuffers()
 }
 
 template <CHIPCore core>
-void cpuThreadExecute()
+void coreThreadExecute()
 {
     uint64_t threadInstructions { 0 };
 
-    while (CPUThreadRunning) [[likely]]
+    while (coreThreadRunning) [[likely]]
     {
         switch (core)
         {
@@ -180,79 +181,95 @@ void cpuThreadExecute()
     executedInstructions = threadInstructions;
 }
 
-inline void startCPUThread()
+inline void startCoreThread()
 {
-    CPUThreadRunning = true;
+    coreThreadRunning = true;
 
     switch (currentCore())
     {
     case CHIPCore::Interpret:
-        cpuThread = std::thread { cpuThreadExecute<CHIPCore::Interpret> };
+        coreThread = std::thread { coreThreadExecute<CHIPCore::Interpret> };
         break;
     case CHIPCore::Cached:
-        cpuThread = std::thread{ cpuThreadExecute<CHIPCore::Cached> };
+        coreThread = std::thread { coreThreadExecute<CHIPCore::Cached> };
         break;
     case CHIPCore::JIT:
-        cpuThread = std::thread{ cpuThreadExecute<CHIPCore::JIT> };
+        coreThread = std::thread { coreThreadExecute<CHIPCore::JIT> };
         break;
     }
 }
-inline void stopCPUThread()
+inline void stopCoreThread()
 {
-    CPUThreadRunning = false;
-    cpuThread.join();
+    coreThreadRunning = false;
+    coreThread.join();
+}
+
+void coreModeChanged()
+{
+    if (coreThreadRunning)
+    {
+        stopCoreThread();
+        startCoreThread();
+    }
+}
+
+template <typename Op>
+inline void threadSafeExec(Op func)
+{
+    const bool threadRunning { coreThreadRunning };
+    if (threadRunning) stopCoreThread();
+    func();
+    if (threadRunning) startCoreThread();
+}
+
+void clearCoreCache()
+{
+    threadSafeExec([&]
+    {
+        switch (currentCore())
+        {
+            case CHIPCore::Interpret:
+                return;
+            case CHIPCore::Cached:
+                chipCachedCore.clearCache();
+                break;
+            case CHIPCore::JIT:
+                chipJITCore.clearJITCache();
+                break;
+        }
+    });
 }
 
 std::filesystem::path currentROMPAth{};
 void loadROM(const std::filesystem::path& path)
 {
-    if (CPUThreadRunning)
-        stopCPUThread();
-
-    if (chipCore->loadROM(path))
+    threadSafeExec([&]
     {
-        paused = false;
-        currentROMPAth = path;
-    }
+        auto st { std::ifstream { path, std::ios::binary } };
 
-    if (unlimitedMode)
-        startCPUThread();
+        if (chipCore->loadROM(st))
+        {
+            paused = false;
+            currentROMPAth = path;
+            clearCoreCache();
+        }
+    });
 }
 
-inline void changePauseState()
+void changePauseState()
 {
     paused = !paused;
-
-    if (paused)
-        chipCore->resetKeys();
 
     if (unlimitedMode)
     {
         if (paused)
-            stopCPUThread();
+            stopCoreThread();
         else
-            startCPUThread();
+            startCoreThread();
     }
-}
 
-inline void coreModeChanged()
-{
-    if (CPUThreadRunning)
-    {
-        stopCPUThread();
-        startCPUThread();
-    }
-}
-
-inline void clearCoreCaches()
-{
-    bool threadRunning = CPUThreadRunning;
-    if (threadRunning) stopCPUThread();
-
-    chipCachedCore.clearCache();
-    chipJITCore.clearJITCache();
-
-    if (threadRunning) startCPUThread();
+    if (paused)
+        chipCore->resetKeys();
 }
 
 void renderImGUI()
@@ -383,7 +400,7 @@ void renderImGUI()
                     coreModeChanged();
                 }
 
-                ImGui::SeparatorText("JIT actions");
+                ImGui::SeparatorText("JIT Actions");
 
                 if (ImGui::Button("Export Disassembly"))
                 {
@@ -398,7 +415,7 @@ void renderImGUI()
                 }
 
                 if (ImGui::Button("Clear Cache"))
-                    clearCoreCaches();
+                    clearCoreCache();
             }
             else
             {
@@ -418,6 +435,11 @@ void renderImGUI()
                         chipCore = &chipInterpretCore;
                         coreModeChanged();
                     }
+
+                    ImGui::SeparatorText("Actions");
+
+                    if (ImGui::Button("Clear Cache"))
+                        clearCoreCache();
                 }
             }
 
@@ -428,7 +450,7 @@ void renderImGUI()
 
             if (ImGui::Checkbox("Unlimited Mode", &unlimitedMode))
             {
-                bool startThread{ false };
+                bool startThread { false };
 
                 if (!paused)
                 {
@@ -436,14 +458,14 @@ void renderImGUI()
                         startThread = true;
                     else
                     {
-                        if (CPUThreadRunning) stopCPUThread();
+                        if (coreThreadRunning) stopCoreThread();
                         glfwSetWindowTitle(window, APP_NAME);
                     }
                 }
 
                 chipCachedCore.setSlowMode(!unlimitedMode);
                 chipJITCore.setSlowMode(!unlimitedMode);
-                if (startThread) startCPUThread();
+                if (startThread) startCoreThread();
             }
 
             if (!chipCore->isRomLoaded())
@@ -463,13 +485,11 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            const bool hasCache { currentCore() == CHIPCore::Cached || currentCore() == CHIPCore::JIT};
-
-            if (ImGui::Checkbox("VFReset", &Quirks::VFReset) && hasCache) clearCoreCaches();
-            if (ImGui::Checkbox("Shifting", &Quirks::Shifting) && hasCache) clearCoreCaches();
-            if (ImGui::Checkbox("Jumping", &Quirks::Jumping) && hasCache) clearCoreCaches();
-            if (ImGui::Checkbox("Clipping", &Quirks::Clipping) && hasCache) clearCoreCaches();
-            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement) && hasCache) clearCoreCaches();
+            if (ImGui::Checkbox("VFReset", &Quirks::VFReset)) clearCoreCache();
+            if (ImGui::Checkbox("Shifting", &Quirks::Shifting)) clearCoreCache();
+            if (ImGui::Checkbox("Jumping", &Quirks::Jumping)) clearCoreCache();
+            if (ImGui::Checkbox("Clipping", &Quirks::Clipping)) clearCoreCache();
+            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement)) clearCoreCache();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -478,7 +498,7 @@ void renderImGUI()
             if (ImGui::Button("Reset to Default"))
             {
                 Quirks::Reset();
-                if (hasCache) clearCoreCaches();
+                clearCoreCache();
             }
 
             ImGui::EndMenu();
@@ -550,13 +570,13 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-    viewport_width = width; viewport_height = height - menuBarHeight;
-    glViewport(0, 0, viewport_width, viewport_height);
+    viewportWidth = width; viewportHeight = height - menuBarHeight;
+    glViewport(0, 0, viewportWidth, viewportHeight);
 }
 
 void window_pos_callback(GLFWwindow* window, int x, int y)
 {
-    glViewport(0, 0, viewport_width, viewport_height);  
+    glViewport(0, 0, viewportWidth, viewportHeight);  
 }
 
 void window_refresh_callback(GLFWwindow* _window)
@@ -632,12 +652,13 @@ void setWindowSize()
     ImGui::Render();
 
     const GLFWvidmode* mode { glfwGetVideoMode(glfwGetPrimaryMonitor()) };
-    viewport_width = { static_cast<int>(mode->width * 0.54f) };
-    viewport_height = viewport_width / 2;
+    const int scale { static_cast<int>(mode->width * 0.5f) / ChipState::SCR_WIDTH };
+    viewportWidth = scale * ChipState::SCR_WIDTH;
+    viewportHeight = scale * ChipState::SCR_HEIGHT;
 
-    glfwSetWindowSize(window, viewport_width, viewport_height + menuBarHeight);
-    glfwSetWindowAspectRatio(window, viewport_width, viewport_height);
-    glViewport(0, 0, viewport_width, viewport_height);
+    glfwSetWindowSize(window, viewportWidth, viewportHeight + menuBarHeight);
+    glfwSetWindowAspectRatio(window, viewportWidth, viewportHeight);
+    glViewport(0, 0, viewportWidth, viewportHeight);
 }
 
 bool setGLFW()
@@ -678,12 +699,12 @@ void setImGUI()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = "imgui.ini";
+    io.IniFilename = nullptr;
 
     const int resolutionX = glfwGetVideoMode(glfwGetPrimaryMonitor())->width;
     const float scaleFactor = (resolutionX / 1920.0f);
 
-    io.Fonts->AddFontFromMemoryTTF((void*)resources::robotoMonoFont, sizeof(resources::robotoMonoFont), scaleFactor * 17);
+    io.Fonts->AddFontFromMemoryCompressedTTF((void*)Resources::ROBOTO_MONO_FONT, sizeof(Resources::ROBOTO_MONO_FONT), scaleFactor * 17);
     ImGui::GetStyle().ScaleAllSizes(scaleFactor);
 
     ImGui::StyleColorsDark();
@@ -701,13 +722,16 @@ int main()
     setWindowSize();
     setBuffers();
 
-    std::thread initThread{ ChipCore::initAudio };
-    loadROM(getExecutablePath() / "ROMs" / "chipLogo.ch8");
+    std::thread initThread { ChipCore::initAudio };
 
-    double lastTime { glfwGetTime() };
-    double executeTimer{};
-    double secondsTimer{};
+    std::stringbuf buf { std::ios::in | std::ios::out };
+    buf.sputn(reinterpret_cast<const char*>(Resources::ROM_1DCELL), sizeof(Resources::ROM_1DCELL));
+    std::istream st { &buf };
+    chipCore->loadROM(st);
 
+    startCoreThread();
+
+    double lastTime { glfwGetTime() }, executeTimer{}, secondsTimer{};
     constexpr double FRAME_RATE { 1.0 / 60 };
 
     while (!glfwWindowShouldClose(window))
@@ -731,18 +755,19 @@ int main()
                 if (unlimitedMode)
                     continue;
 
-                for (int i = 0; i < IPF; i++)
+                for (int i = 0; i < IPF; )
                 {
                     switch (currentCore())
                     {
                     case CHIPCore::JIT:
-                        chipJITCore.execute();
+                        i += chipJITCore.execute();
                         break;
                     case CHIPCore::Cached:
-                        chipCachedCore.execute();
+                        i += chipCachedCore.execute();
                         break;
                     case CHIPCore::Interpret:
                         chipInterpretCore.execute();
+                        i++;
                         break;
                     }
                 }
@@ -753,21 +778,15 @@ int main()
         {
             if (unlimitedMode)
             {
-                const bool threadRunning { CPUThreadRunning };
+                threadSafeExec([&]()
+                { 
+                    const std::string mipsStr { toMIPSstring(executedInstructions / secondsTimer) };
+                    instrPerSecondStr = "Instructions per second: " + mipsStr;
+                    executedInstructions = 0;
 
-                if (threadRunning)
-                    stopCPUThread();
-
-                const std::string mipsStr { toMIPSstring(executedInstructions / secondsTimer) };
-                instrPerSecondStr = "Instructions per second: " + mipsStr;
-
-                const std::string title { std::string(APP_NAME) + " (" + mipsStr + ")" };
-                glfwSetWindowTitle(window, title.c_str());
-
-                executedInstructions = 0;
-
-                if (threadRunning)
-                    startCPUThread();
+                    const std::string title { std::string(APP_NAME) + " (" + mipsStr + ")" };
+                    glfwSetWindowTitle(window, title.c_str());
+                });
             }
 
             secondsTimer = 0;
@@ -784,8 +803,8 @@ int main()
 
     initThread.join();
 
-    if (CPUThreadRunning)
-        stopCPUThread();
+    if (coreThreadRunning)
+        stopCoreThread();
 
     return 0;
 }
