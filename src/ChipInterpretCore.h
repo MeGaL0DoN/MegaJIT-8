@@ -1,18 +1,20 @@
+#pragma once
+
 #include <random>
 
 #include "ChipState.h"
 #include "ChipCore.h"
-#include "Quirks.h"
 #include "macros.h"
-
-extern ChipState s;
 
 class ChipInterpretCore : public ChipCore
 {
 public:
-	FORCE_INLINE void execute()
+	ChipInterpretCore(ChipState& s) : ChipCore(s)
+	{}
+
+	FORCE_INLINE uint64_t execute() override
 	{
-		const uint16_t opcode = (s.RAM[s.pc & 0xFFF] << 8) | s.RAM[(s.pc + 1) & 0xFFF];
+		const uint16_t opcode = (s.RAM[s.pc] << 8) | s.RAM[s.pc + 1];
 		s.pc += 2;
 
 		#define nnn (opcode & 0x0FFF)
@@ -37,6 +39,10 @@ public:
 			case 0x00EE: 
 				s.pc = s.stack[--s.sp];
 				break;
+			default:
+				s.pc -= 2;
+				assert(false);
+				break;
 			}
 			break;
 		}
@@ -59,6 +65,10 @@ public:
 			case 0x0000:
 				if (regX == regY) skipInstr();
 				break;
+			default:
+				s.pc -= 2;
+				assert(false);
+				break;
 			}
 			break;
 		case 0x6000:
@@ -70,61 +80,69 @@ public:
 		case 0x8000:
 			switch (n)
 			{
-			case 0x0000:
+			case 0x0:
 				regX = regY;
 				break;
-			case 0x0001:
+			case 0x1:
 				regX |= regY;
-				if (Quirks::VFReset) s.V[0xF] = 0;
+				if (s.quirks.vfReset) s.V[0xF] = 0;
 				break;
-			case 0x0002:
+			case 0x2:
 				regX &= regY;
-				if (Quirks::VFReset) s.V[0xF] = 0;
+				if (s.quirks.vfReset) s.V[0xF] = 0;
 				break;
-			case 0x0003:
+			case 0x3:
 				regX ^= regY;
-				if (Quirks::VFReset) s.V[0xF] = 0;
+				if (s.quirks.vfReset) s.V[0xF] = 0;
 				break;
-			case 0x0004:
+			case 0x4:
 			{
 				regX += regY;
 				s.V[0xF] = regX < regY;
 				break;
 			}
-			case 0x0005:
+			case 0x5:
 			{
 				const uint8_t flag = regX >= regY;
 				regX -= regY;
 				s.V[0xF] = flag;
 				break;
 			}
-			case 0x0006: 
+			case 0x6: 
 			{
-			    if (!Quirks::Shifting) regX = regY;
+			    if (!s.quirks.shifting) regX = regY;
 				const uint8_t lsb = regX & 0x1;
 				regX >>= 1;
 				s.V[0xF] = lsb;
 				break;
 			}
-			case 0x0007: 
+			case 0x7: 
 				regX = regY - regX;
 				s.V[0xF] = regY >= regX;
 				break;
-			case 0x000E: 
+			case 0xE: 
 			{
-				if (!Quirks::Shifting) regX = regY;
+				if (!s.quirks.shifting) regX = regY;
 				const uint8_t msb = regX >> 7;
 				regX <<= 1;
 				s.V[0xF] = msb;
 				break;
 			}
+			default:
+				s.pc -= 2;
+				assert(false);
+				break;
 			}
 			break;
 		case 0x9000:
 			switch (n)
 			{
-			case 0x0000:
+			case 0x0:
 				if (regX != regY) skipInstr();
+				break;
+			default:
+				s.pc -= 2;
+				assert(false);
 				break;
 			}
 			break;
@@ -132,11 +150,11 @@ public:
 			s.I = nnn;
 			break;
 		case 0xB000:
-			if (Quirks::Jumping) s.pc = regX + nnn;
+			if (s.quirks.jumping) s.pc = regX + nnn;
 			else s.pc = s.V[0] + nnn;
 			break;
 		case 0xC000:
-			regX = rngDistr(rngEng) & nn;
+			regX = rng(eng) & nn;
 			break;
 		case 0xD000: 
 			drawSprite(regX & (ChipState::SCR_WIDTH - 1), regY & (ChipState::SCR_HEIGHT - 1), n);
@@ -144,27 +162,31 @@ public:
 		case 0xE000:
 			switch (nn)
 			{
-			case 0x009E:
+			case 0x9E:
 				if (s.keys[regX & 0xF]) skipInstr();
 				break;
-			case 0x00A1:
+			case 0xA1:
 				if (!s.keys[regX & 0xF]) skipInstr();
+				break;
+			default:
+				s.pc -= 2;
+				assert(false);
 				break;
 			}
 			break;
 		case 0xF000:
 			switch (nn)
 			{
-			case 0x0007:
+			case 0x07:
 				regX = s.delayTimer;
 				break;
-			case 0x000A: 
+			case 0x0A: 
 				if (s.firstFX0ACall)
 				{
-					s.inputReg = &regX;
+					s.inputReg = static_cast<int8_t>(x);
 					s.firstFX0ACall = false;
 				}
-				else if (s.inputReg == nullptr)
+				else if (s.inputReg == -1)
 				{
 					s.firstFX0ACall = true;
 					break;
@@ -172,38 +194,53 @@ public:
 
 				s.pc -= 2;
 				break;
-			case 0x001E:
-				s.I += regX;
+			case 0x1E:
+				s.I = (s.I + regX) & 0xFFF;
 				break;
-			case 0x0015:
+			case 0x15:
 				s.delayTimer = regX;
 				break;
-			case 0x0018:
+			case 0x18:
 				s.soundTimer = regX;
 				break;
-			case 0x0029:
+			case 0x29:
 				s.I = (regX & 0xF) * 0x5;
 				break;
-			case 0x0033:
-				s.RAM[s.I & 0xFFF] = regX / 100;
-				s.RAM[(s.I + 1) & 0xFFF] = (regX / 10) % 10;
-				s.RAM[(s.I + 2) & 0xFFF] = regX % 10;
+			case 0x33:
+				s.RAM[s.I] = regX / 100;
+				if (s.I == 0xFFF) break;
+				s.RAM[s.I + 1] = (regX / 10) % 10;
+				if (s.I == 0xFFE) break;
+				s.RAM[s.I + 2] = regX % 10;
 				break;
-			case 0x0055:
-				for (int i = 0; i <= x; i++)
-					s.RAM[(s.I + i) & 0xFFF] = s.V[i];
+			case 0x55:
+				if ((s.I + x) > 0xFFF)
+					break;
 
-				if (Quirks::MemoryIncrement) s.I += x + 1;
+				for (int i = 0; i <= x; i++)
+					s.RAM[s.I + i] = s.V[i];
+
+				if (s.quirks.memoryIncrement)
+					s.I = (s.I + x + 1) & 0xFFF;
+	
 				break;
-			case 0x0065:
+			case 0x65:
 				for (int i = 0; i <= x; i++)
-					s.V[i] = s.RAM[(s.I + i) & 0xFFF];
+					s.V[i] = s.RAM[s.I + i];
 
-				if (Quirks::MemoryIncrement) s.I += x + 1;
+				if (s.quirks.memoryIncrement)
+					s.I = (s.I + x + 1) & 0xFFF;
+
+				break;
+			default:
+				s.pc -= 2;
+				assert(false);
 				break;
 			}
 			break;
 		}
+
+		return 1;
 
 		#undef n
 		#undef nn
@@ -215,53 +252,48 @@ public:
 	}
 
 private:
-	std::default_random_engine rngEng { std::random_device{}() };
-	std::uniform_int_distribution<> rngDistr { 0, 255 };
+	std::default_random_engine eng { std::random_device{}() };
+	std::uniform_int_distribution<> rng { 0, 255 };
 
-	void initialize() override
-	{
-		s.reset();
-	}
-
-	void drawSprite(uint8_t Xpos, uint8_t Ypos, uint8_t height)
+	void drawSprite(uint8_t x, uint8_t y, uint8_t height)
 	{
 		s.V[0xF] = 0;
-		const bool partialDraw { Xpos > 56 };
+		const bool partialDraw { x > 56 };
 
 		for (int i = 0; i < height; i++)
 		{
-			const uint8_t spriteRow { s.RAM[(s.I + i) & 0xFFF] };
-
-			if (Quirks::Clipping)
-			{
-				if (Ypos >= ChipState::SCR_HEIGHT)
-					break;
-			}
-			else
-				Ypos &= (ChipState::SCR_HEIGHT - 1);
-
+			const uint8_t spriteRow { s.RAM[s.I + i] };
 			uint64_t spriteMask;
 
 			if (partialDraw)
 			{
-				const uint64_t leftPart { static_cast<uint64_t>(spriteRow) >> (Xpos - 56) };
+				const uint64_t leftPart { static_cast<uint64_t>(spriteRow) >> (x - 56) };
 
-				if (Quirks::Clipping)
+				if (s.quirks.clipping)
 					spriteMask = leftPart;
 				else
 				{
-					const uint64_t rightPart { static_cast<uint64_t>(spriteRow) << (64 - (Xpos - 56)) };
+					const uint64_t rightPart { static_cast<uint64_t>(spriteRow) << (64 - (x - 56)) };
 					spriteMask = leftPart | rightPart;
 				}
 			}
 			else
-				spriteMask = static_cast<uint64_t>(spriteRow) << (63 - Xpos - 7);
+				spriteMask = static_cast<uint64_t>(spriteRow) << (63 - x - 7);
 
-			uint64_t& screenRow { s.screenBuffer[Ypos] };
+			uint64_t& screenRow { s.screenBuffer[y] };
 			s.V[0xF] |= ((screenRow & spriteMask) != 0);
 
 			screenRow ^= spriteMask;
-			Ypos++;
+
+			if (s.quirks.clipping)
+			{
+				if (y == (ChipState::SCR_HEIGHT - 1))
+					break;
+
+				y++;
+			}
+			else
+				y = (y + 1) & (ChipState::SCR_HEIGHT - 1);
 		}
 	}
 };

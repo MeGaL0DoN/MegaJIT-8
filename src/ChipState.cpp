@@ -1,7 +1,7 @@
 #include "ChipState.h"
 #include <cstring>
 
-static constexpr uint8_t fontset[80] =
+static constexpr uint8_t FONT[]
 {
 	0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
 	0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -28,15 +28,13 @@ void ChipState::reset()
 	sp = 0;
 	delayTimer = 0;
 	soundTimer = 0;
-	inputReg = nullptr;
+	inputReg = -1;
 	firstFX0ACall = true;
+	V = {};
+	stack = {};
+	screenBuffer = {};
+	keys = {};
 
-	std::memset(V.data(), 0, sizeof(V));
-	std::memset(RAM.data(), 0, sizeof(RAM));
-	std::memcpy(RAM.data(), fontset, sizeof(fontset));
-
-	std::memset(screenBuffer.data(), 0, sizeof(screenBuffer));
-	std::memset(keys.data(), 0, sizeof(keys));
+	RAM = {};
+	std::memcpy(RAM.data(), FONT, sizeof(FONT));
 }
-
-ChipState s{};

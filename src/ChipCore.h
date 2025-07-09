@@ -1,22 +1,26 @@
 #pragma once
-#include <filesystem>
+
 #include <cstring>
 #include <fstream>
-
 #include "ChipState.h"
-
-extern ChipState s;
 
 class ChipCore
 {
 public:
-	static inline bool enableAudio { false };
+	static inline bool EnableAudio { false };
+
 	static void initAudio();
 	static void setVolume(double val);
 
+	ChipCore(ChipState& s) : s(s)
+	{}
+
+	virtual uint64_t execute() = 0;
+
 	bool loadROM(std::istream& is)
 	{
-		if (!is) return false;
+		if (!is) 
+			return false;
 
 		is.seekg(0, std::ios::end);
 		const std::ifstream::pos_type size { is.tellg() };
@@ -24,8 +28,6 @@ public:
 		if (size <= (ChipState::RAM_SIZE - 0x200))
 		{
 			initialize();
-			romLoaded = true;
-
 			is.seekg(0, std::ios::beg);
 			is.read(reinterpret_cast<char*>(&s.RAM[0x200]), size);
 
@@ -35,18 +37,16 @@ public:
 		return false;
 	}
 
-	bool isRomLoaded() { return romLoaded; }
-
 	const std::array<uint64_t, ChipState::SCR_HEIGHT>& getScreenBuffer() { return s.screenBuffer; }
-	inline bool awaitingKeyPress() { return s.inputReg != nullptr; }
+	inline bool awaitingKeyPress() { return s.inputReg != -1; }
 
 	inline void setKey(uint8_t key, bool isPressed)
 	{
 		s.keys[key & 0xF] = isPressed;
 		if (awaitingKeyPress() && !isPressed)
 		{
-			*s.inputReg = key;
-			s.inputReg = nullptr;
+			s.V[s.inputReg] = key;
+			s.inputReg = -1;
 		}
 	}
 
@@ -59,6 +59,10 @@ public:
 	}
 
 protected:
-	static inline bool romLoaded { false };
-	virtual void initialize() = 0;
+	ChipState& s;
+
+	virtual void initialize()
+	{
+		s.reset();
+	}
 };

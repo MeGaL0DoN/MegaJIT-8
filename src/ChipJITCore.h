@@ -11,22 +11,19 @@
 #include "ChipCore.h"
 #include "ChipEmitter.h"
 #include "ChipJITState.h"
-
 #include "macros.h"
-
-extern ChipState s;
-ChipJITState JIT;
 
 class ChipJITCore : public ChipCore
 {
 public:
-	static constexpr size_t BLOCK_MAX_INSTR { 256 };
-	static constexpr size_t MAX_BLOCK_COUNT { 127 };
+	friend ChipEmitter;
 
-	FORCE_INLINE uint64_t execute()
+	ChipJITCore(ChipState& s) : ChipCore(s)
+	{}
+
+	FORCE_INLINE uint64_t execute() override
 	{
-		const auto map { JIT.blockMap[s.pc] };
-		return map & 0x80 ? executeBlock(map & 0x7F) : compileBlock();
+		return c.execute(JIT.blockMap[s.pc]);
 	}
 
 	void clearJITCache()
@@ -48,39 +45,44 @@ public:
 
 		if (!udInitialized)
 		{
-			ud_init(&ud_obj);
-			ud_set_mode(&ud_obj, 64);
-			ud_set_syntax(&ud_obj, UD_SYN_INTEL);
+			ud_init(&ud);
+			ud_set_mode(&ud, 64);
+			ud_set_syntax(&ud, UD_SYN_INTEL);
 			udInitialized = true;
 		}
 
 		for (const auto& block : JIT.blocks)
 		{
-			if (!(JIT.blockMap[block.pc] & 0x80))
+			const auto offset { JIT.blockMap[block.pc] };
+
+			if (offset == 0)
 				continue;
 
 			outFile << "Block at PC: " << std::hex << "0x" << block.pc << "-0x" << block.pcRanges.back().second
 					<< "\n-----------------------------------------\n";
 
-			ud_set_input_buffer(&ud_obj, c.getCodePtr() + block.cacheOffset, block.cacheSize);
+			ud_set_input_buffer(&ud, c.getCodePtr() + offset, block.cacheSize);
 
-			while (ud_disassemble(&ud_obj))
-				outFile << "0x" << std::hex << std::setw(8) << std::setfill('0') << ud_insn_off(&ud_obj) << " | " << ud_insn_asm(&ud_obj) << '\n';
+			while (ud_disassemble(&ud))
+				outFile << "0x" << std::hex << std::setw(8) << std::setfill('0') << ud_insn_off(&ud) << " | " << ud_insn_asm(&ud) << '\n';
 
 			outFile << '\n';
 		}
 	}
+
 private:
-	ud_t ud_obj{};
+	ud_t ud{};
 	bool udInitialized { false };
 
-private:
-	ChipEmitter c{};
+	ChipJITState JIT{};
+	ChipEmitter c { *this };
+
 	JITBlock* block { nullptr };
-
 	std::queue<bool> blockFlagCalcList{};
+	uint16_t flagOps { 0 };
 
-	uint16_t instructionsPerBlock { BLOCK_MAX_INSTR };
+	static constexpr size_t BLOCK_MAX_INSTR { 255 };
+	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
 
 	void initialize() override
 	{
@@ -88,44 +90,46 @@ private:
 		clearJITCache();
 	}
 
-	FORCE_INLINE uint64_t executeBlock(uint8_t ind)
-	{
-		const auto& block { JIT.blocks[ind] };
-		return c.execute(block.cacheOffset);
-	}
-
 	inline uint64_t compileBlock()
 	{
-		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.9) };
+		constexpr size_t CACHE_CLEAR_THRESHOLD{ static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.8) };
 
-		if (JIT.blocks.size() == MAX_BLOCK_COUNT || c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
+		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
 
-		auto& map { JIT.blockMap[s.pc] };
-
-		if (map == 0x7F)
+		for (auto& b : JIT.blocks)
 		{
-			map = static_cast<uint8_t>(JIT.blocks.size());
-			JIT.blocks.emplace_back(s.pc);
+			if (JIT.blockMap[b.pc] == 0)
+			{
+				block = &b;
+				block->pc = s.pc;
+				block->pcRanges.clear();
+				break;
+			}
 		}
 
-		block = &JIT.blocks[map];
-		block->cacheOffset = static_cast<uint32_t>(c.getCodeSize());
-		block->pcRanges.clear();
+		if (block == nullptr)
+		{
+			JIT.blocks.emplace_back(s.pc);
+			block = &JIT.blocks.back();
+		}
+
 		blockFlagCalcList = {};
 
-		map |= 0x80;
+		const auto offset { static_cast<uint32_t>(c.getCodeSize()) };
+		JIT.blockMap[s.pc] = offset;
 
-		c.resetState();
+		c.reset();
 		analyzeBlock(s.pc);
 		c.allocateRegs();
 		c.emitPrologue();
 
 		c.instructions = 0;
 		emitBlock(s.pc);
-		block->cacheSize = static_cast<uint32_t>(c.getCodeSize() - block->cacheOffset);
+		block->cacheSize = static_cast<uint32_t>(c.getCodeSize() - offset);
+		block = nullptr;
 
-		return c.execute(block->cacheOffset);
+		return c.execute(offset);
 	}
 
 	inline bool isInlinableJump(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
@@ -219,28 +223,45 @@ private:
 		}
 	}
 
-	inline uint16_t analyzeBlock(uint16_t pc, uint16_t flagOps = 0)
+	inline uint16_t analyzeBlock(uint16_t pc)
 	{
 		const uint16_t startPC { pc };
 		bool branch { false }, flow { false };
+
+		const auto calculateAllFlags = [&]
+		{
+			while (flagOps > 0)
+			{
+				blockFlagCalcList.push(true);
+				flagOps--;
+			}
+		};
+
+		const auto handleFlow = [&]
+		{
+			if (branch)
+				calculateAllFlags();
+			else
+				flow = true;
+		};
 		 
 		const auto setFlagOpCalcVal = [&](bool val)
 		{
-			if (flagOps == 0)
-				return;
-
 			if (!val)
 			{
 				if (branch)
 					return;
 
-				blockFlagCalcList.push(false);
-				c.VRegUsage[0xF]--;
+				c.VRegUsage[0xF] -= flagOps;
+
+				while (flagOps > 0)
+				{
+					blockFlagCalcList.push(false);
+					flagOps--;
+				}
 			}
 			else
-				blockFlagCalcList.push(true);
-
-			flagOps--;
+				calculateAllFlags();
 		};
 
 		while (c.instructions < instructionsPerBlock || branch)
@@ -261,7 +282,7 @@ private:
 				switch (nnn)
 				{
 				case 0x00EE:
-					flow = !branch;
+					handleFlow();
 					break;
 				}
 				break;
@@ -269,18 +290,24 @@ private:
 				if (isInlinableJump(startPC, pc, nnn, c.instructions))
 				{
 					if (!branch)
-						return analyzeBlock(nnn, flagOps);
+						return analyzeBlock(nnn);
 
+					calculateAllFlags();
 					analyzeBlock(nnn);
 				}
-				else 
-					flow = !branch;
+				else
+					handleFlow();
 				break;
 			case 0x2000:
 				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
-					analyzeBlock(nnn, branch ? 0 : flagOps);
+				{
+					if (branch)
+						calculateAllFlags();
+
+					analyzeBlock(nnn);
+				}
 				else
-					flow = !branch;
+					handleFlow();
 				break;
 
 			case 0x3000:
@@ -325,10 +352,10 @@ private:
 
 					if (y == 0xF && x != 0xF)
 						setFlagOpCalcVal(true);
-					else if (Quirks::VFReset)
+					else if (s.quirks.vfReset)
 						setFlagOpCalcVal(false);
 
-					if (Quirks::VFReset)
+					if (s.quirks.vfReset)
 					{
 						c.VRegUsage[0xF]++;
 						flagOps++;
@@ -348,7 +375,7 @@ private:
 					c.VRegUsage[x]++;
 					c.VRegUsage[0xF]++;
 
-					if (!Quirks::Shifting && x != y)
+					if (!s.quirks.shifting && x != y)
 					{
 						c.VRegUsage[x]++;
 						c.VRegUsage[y]++;
@@ -377,12 +404,8 @@ private:
 				c.IRegUsage++;
 				break;
 			case 0xB000:
-				c.VRegUsage[(Quirks::Jumping ? x : 0)]++;
-
-				if (Quirks::Jumping && x == 0xF)
-					setFlagOpCalcVal(true);
-
-				flow = !branch;
+				c.VRegUsage[(s.quirks.jumping ? x : 0)]++;
+				handleFlow();
 				break;
 			case 0xD000:
 				c.VRegUsage[x]++; 
@@ -407,13 +430,8 @@ private:
 						setFlagOpCalcVal(true);
 					break;
 				case 0x0A:
-					if (x == 0xF)
-						setFlagOpCalcVal(false);
-
-					if (branch)
-						break;
-
-					return pc;
+					handleFlow();
+					break;
 				case 0x1E:
 				case 0x29:
 				case 0x33:
@@ -425,7 +443,7 @@ private:
 
 					break;
 				case 0x55:
-					c.IRegUsage += (Quirks::MemoryIncrement ? 2 : 1);
+					c.IRegUsage += (s.quirks.memoryIncrement ? 2 : 1);
 
 					for (int i = 0; i <= x; i++)
 						c.VRegUsage[i]++;
@@ -436,7 +454,7 @@ private:
 					break;
 
 				case 0x65:
-					c.IRegUsage += (Quirks::MemoryIncrement ? 2 : 1);
+					c.IRegUsage += (s.quirks.memoryIncrement ? 2 : 1);
 
 					for (int i = 0; i <= x; i++)
 						c.VRegUsage[i]++;
@@ -455,8 +473,7 @@ private:
 			branch = false;
 		}
 
-		while (flagOps--) { blockFlagCalcList.push(true); }
-
+		calculateAllFlags();
 		return pc;
 	}
 
@@ -514,7 +531,7 @@ private:
 					{
 						if (branchEndPtr)
 						{
-							c.emitUncondJumpPlaceholder();
+							c.emitJumpPlaceholder();
 							inlinedSubCondRetPtrs->push_back(c.getCodeEndPtr());
 						}
 						else
@@ -606,13 +623,13 @@ private:
 					c.emit8XY0(x, y);
 					break;
 				case 0x1:
-					c.emit8XY1(x, y, Quirks::VFReset ? popFlagCalc() : false);
+					c.emit8XY1(x, y, s.quirks.vfReset ? popFlagCalc() : false);
 					break;
 				case 0x2:
-					c.emit8XY2(x, y, Quirks::VFReset ? popFlagCalc() : false);
+					c.emit8XY2(x, y, s.quirks.vfReset ? popFlagCalc() : false);
 					break;
 				case 0x3:
-					c.emit8XY3(x, y, Quirks::VFReset ? popFlagCalc() : false);
+					c.emit8XY3(x, y, s.quirks.vfReset ? popFlagCalc() : false);
 					break;
 				case 0x4:
 					c.emit8XY4(x, y, popFlagCalc());
@@ -675,32 +692,32 @@ private:
 			case 0xF000:
 				switch (nn)
 				{
-				case 0x0007:
+				case 0x07:
 					c.emitFX07(x);
 					break;
-				case 0x000A:
+				case 0x0A:
 					c.emitFX0A(x, pc);
 					flow = true;
 					break;
-				case 0x001E:
+				case 0x1E:
 					c.emitFX1E(x);
 					break;
-				case 0x0015:
+				case 0x15:
 					c.emitFX15(x);
 					break;
-				case 0x0018:
+				case 0x18:
 					c.emitFX18(x);
 					break;
-				case 0x0029:
+				case 0x29:
 					c.emitFX29(x);
 					break;
-				case 0x0033:
+				case 0x33:
 					c.emitFX33(x, pc);
 					break;
-				case 0x0055:
+				case 0x55:
 					c.emitFX55(x, pc);
 					break;
-				case 0x0065:
+				case 0x65:
 					c.emitFX65(x); 
 					break;
 				default:
@@ -730,5 +747,25 @@ private:
 		return pc;
 
 #undef BRANCH
+	}
+
+	bool invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
+	{
+		bool invalidated { false };
+
+		for (const auto& block : JIT.blocks)
+		{
+			for (const auto& range : block.pcRanges)
+			{
+				if (range.first <= endAddr && range.second >= startAddr)
+				{
+					JIT.blockMap[block.pc] = 0;
+					invalidated = true;
+					break;
+				}
+			}
+		}
+
+		return invalidated;
 	}
 };

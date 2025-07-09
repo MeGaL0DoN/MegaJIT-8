@@ -22,35 +22,40 @@
 
 constexpr const char* APP_NAME { "MegaJIT-8" };
 
-extern ChipState s;
+ChipState s{};
 
-ChipInterpretCore chipInterpretCore{};
-ChipCachedCore chipCachedCore{};
-ChipJITCore chipJITCore{};
+ChipInterpretCore chipInterpretCore { s };
+ChipCachedCore chipCachedCore { s };
+ChipJITCore chipJITCore { s };
 ChipCore* chipCore { &chipJITCore };
 
-enum class CHIPCore
+enum class CoreType
 {
     Interpret,
     Cached,
     JIT
 };
 
-CHIPCore currentCore()
+CoreType currentCore()
 {
     if (chipCore == &chipInterpretCore)
-        return CHIPCore::Interpret;
+        return CoreType::Interpret;
     if (chipCore == &chipCachedCore)
-        return CHIPCore::Cached;
+        return CoreType::Cached;
     if (chipCore == &chipJITCore)
-        return CHIPCore::JIT;
+        return CoreType::JIT;
 
     UNREACHABLE();
 }
 
 std::thread coreThread;
-std::atomic<bool> coreThreadRunning { false };
-uint64_t executedInstructions { 0 };
+bool coreThreadRunning { false };
+std::atomic<bool> executeCore { false };
+std::atomic<bool> stoppedExecuting { false };
+
+bool setInstructions { false };
+uint64_t executedInstructions {};
+std::string statStr { "0000.000 MIPS | 00.000 MIPF" };
 
 bool unlimitedMode { true };
 
@@ -58,13 +63,15 @@ int IPF { 10 };
 bool paused { false };
 
 bool enableRainbow { false };
-Shader pixelShader;
+Shader pixelShader{};
 uint32_t chipTexture;
 
 int viewportWidth, viewportHeight;
 int menuBarHeight;
 GLFWwindow* window;
 
+const std::filesystem::path defaultPath { std::filesystem::current_path() };
+std::filesystem::path currentRomPath{};
 bool fileDialogOpen { false };
 
 #ifdef _WIN32
@@ -73,20 +80,34 @@ bool fileDialogOpen { false };
 #define STR(s) s
 #endif
 
-const std::filesystem::path defaultPath { std::filesystem::current_path() };
 constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
 constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x86-64 Assembly"), STR("txt")} };
 
-std::string instrPerSecondStr {"Instructions per second: 0.000 MIPS"};
-
-std::string toMIPSstring(uint64_t instr)
+std::string getStatStr(uint64_t instrs)
 {
-    double mips = instr / 1e6;
+    const double mips { instrs / 1e6 };
+    const double mipf { mips / 60 };
 
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3) << mips << " MIPS";
+    oss << std::fixed << std::setprecision(3) << mips << " MIPS | " << mipf << " MIPF";
 
     return oss.str();
+}
+
+template <typename Op>
+void threadSafeExec(Op func)
+{
+    if (coreThreadRunning)
+    {
+        executeCore = false;
+        while (!stoppedExecuting) {};
+
+        func();
+        executeCore = true;
+        stoppedExecuting = false;
+    }
+    else
+        func();
 }
 
 std::array<uint8_t, ChipState::SCR_HEIGHT * ChipState::SCR_WIDTH> textureBuf;
@@ -95,8 +116,11 @@ void draw()
 {
     const auto& screenBuf { chipCore->getScreenBuffer() };
 
-    for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
-        textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
+    threadSafeExec([&]
+    {
+        for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
+            textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
+    });
 
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
@@ -156,51 +180,68 @@ void setBuffers()
     pixelShader.setBool("rainbow", false);
 }
 
-template <CHIPCore core>
+template <CoreType core>
 void coreThreadExecute()
 {
-    uint64_t threadInstructions { 0 };
+    uint64_t localInstructions { 0 };
 
     while (coreThreadRunning) [[likely]]
     {
-        switch (core)
+        while (executeCore) [[likely]]
         {
-        case CHIPCore::JIT:
-            threadInstructions += chipJITCore.execute();
-            break;
-        case CHIPCore::Cached:
-            threadInstructions += chipCachedCore.execute();
-            break;
-        case CHIPCore::Interpret:
-            chipInterpretCore.execute();
-            threadInstructions++;
-            break;
+            switch (core)
+            {
+            case CoreType::JIT:
+                localInstructions += chipJITCore.execute();
+                break;
+            case CoreType::Cached:
+                localInstructions += chipCachedCore.execute();
+                break;
+            case CoreType::Interpret:
+                chipInterpretCore.execute();
+                localInstructions++;
+                break;
+            }
         }
-    }
 
-    executedInstructions = threadInstructions;
+        if (setInstructions)
+        {
+            executedInstructions = localInstructions;
+            localInstructions = 0;
+            setInstructions = false;
+        }
+
+        stoppedExecuting = true;
+        while (stoppedExecuting) {};
+    }
 }
 
 inline void startCoreThread()
 {
     coreThreadRunning = true;
+    executeCore = true;
 
     switch (currentCore())
     {
-    case CHIPCore::Interpret:
-        coreThread = std::thread { coreThreadExecute<CHIPCore::Interpret> };
+    case CoreType::Interpret:
+        coreThread = std::thread { coreThreadExecute<CoreType::Interpret> };
         break;
-    case CHIPCore::Cached:
-        coreThread = std::thread { coreThreadExecute<CHIPCore::Cached> };
+    case CoreType::Cached:
+        coreThread = std::thread { coreThreadExecute<CoreType::Cached> };
         break;
-    case CHIPCore::JIT:
-        coreThread = std::thread { coreThreadExecute<CHIPCore::JIT> };
+    case CoreType::JIT:
+        coreThread = std::thread { coreThreadExecute<CoreType::JIT> };
         break;
     }
 }
 inline void stopCoreThread()
 {
     coreThreadRunning = false;
+    executeCore = false;
+
+    while (!stoppedExecuting) {};
+    stoppedExecuting = false;
+
     coreThread.join();
 }
 
@@ -213,45 +254,20 @@ void coreModeChanged()
     }
 }
 
-template <typename Op>
-inline void threadSafeExec(Op func)
-{
-    const bool threadRunning { coreThreadRunning };
-    if (threadRunning) stopCoreThread();
-    func();
-    if (threadRunning) startCoreThread();
-}
-
 void clearCoreCache()
 {
     threadSafeExec([&]
     {
         switch (currentCore())
         {
-            case CHIPCore::Interpret:
+            case CoreType::Interpret:
                 return;
-            case CHIPCore::Cached:
+            case CoreType::Cached:
                 chipCachedCore.clearCache();
                 break;
-            case CHIPCore::JIT:
+            case CoreType::JIT:
                 chipJITCore.clearJITCache();
                 break;
-        }
-    });
-}
-
-std::filesystem::path currentROMPAth{};
-void loadROM(const std::filesystem::path& path)
-{
-    threadSafeExec([&]
-    {
-        auto st { std::ifstream { path, std::ios::binary } };
-
-        if (chipCore->loadROM(st))
-        {
-            paused = false;
-            currentROMPAth = path;
-            clearCoreCache();
         }
     });
 }
@@ -270,6 +286,23 @@ void changePauseState()
 
     if (paused)
         chipCore->resetKeys();
+}
+
+void loadROM(const std::filesystem::path& path)
+{
+    threadSafeExec([&]
+    {
+        auto st { std::ifstream { path, std::ios::binary } };
+
+        if (chipCore->loadROM(st))
+        {
+            currentRomPath = path;
+            clearCoreCache();
+
+            if (paused)
+                changePauseState();
+        }
+    });
 }
 
 void renderImGUI()
@@ -294,7 +327,7 @@ void renderImGUI()
                 fileDialogOpen = false;
             }
             else if (ImGui::MenuItem("Reload ROM", "(Esc)"))
-                loadROM(currentROMPAth.c_str());
+                loadROM(currentRomPath.c_str());
 
             ImGui::EndMenu();
         }
@@ -305,9 +338,9 @@ void renderImGUI()
             static int volume { 50 };
 
             ImGui::SeparatorText("Sound");
-            ImGui::Checkbox("Enable Sound", &ChipCore::enableAudio);
+            ImGui::Checkbox("Enable Sound", &ChipCore::EnableAudio);
 
-            if (ChipCore::enableAudio)
+            if (ChipCore::EnableAudio)
             {
                 ImGui::Spacing();
 
@@ -378,7 +411,7 @@ void renderImGUI()
                 enableRainbow = false;
                 pixelShader.setBool("rainbow", false);
 
-                ChipCore::enableAudio = true;
+                ChipCore::EnableAudio = true;
 
                 volume = 50;
                 ChipCore::setVolume(0.5);
@@ -391,7 +424,7 @@ void renderImGUI()
             ImGui::Text("Current Mode: ");
             ImGui::SameLine();
 
-            if (currentCore() == CHIPCore::JIT)
+            if (currentCore() == CoreType::JIT)
             {
                 if (ImGui::Button("JIT"))
                 {
@@ -419,7 +452,7 @@ void renderImGUI()
             }
             else
             {
-                if (currentCore() == CHIPCore::Interpret)
+                if (currentCore() == CoreType::Interpret)
                 {
                     if (ImGui::Button("Interpreter"))
                     {
@@ -445,38 +478,31 @@ void renderImGUI()
 
             ImGui::SeparatorText("Performance");
 
-            if (!chipCore->isRomLoaded())
-                ImGui::BeginDisabled();
-
             if (ImGui::Checkbox("Unlimited Mode", &unlimitedMode))
             {
-                bool startThread { false };
-
-                if (!paused)
-                {
-                    if (unlimitedMode)
-                        startThread = true;
-                    else
-                    {
-                        if (coreThreadRunning) stopCoreThread();
-                        glfwSetWindowTitle(window, APP_NAME);
-                    }
-                }
-
                 chipCachedCore.setSlowMode(!unlimitedMode);
                 chipJITCore.setSlowMode(!unlimitedMode);
-                if (startThread) startCoreThread();
-            }
 
-            if (!chipCore->isRomLoaded())
-                ImGui::EndDisabled();
+                if (unlimitedMode)
+                {
+                    if (!paused)
+                        startCoreThread();
+                }
+                else
+                {
+                    if (!paused)
+                        stopCoreThread();
+
+                    glfwSetWindowTitle(window, APP_NAME);
+                }
+            }
 
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
             if (unlimitedMode)
-                ImGui::Text("%s", instrPerSecondStr.c_str());
+                ImGui::Text("Stats: %s", statStr.c_str());
             else
                 ImGui::SliderInt("IPF", &IPF, 1, 100);
 
@@ -485,11 +511,11 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            if (ImGui::Checkbox("VFReset", &Quirks::VFReset)) clearCoreCache();
-            if (ImGui::Checkbox("Shifting", &Quirks::Shifting)) clearCoreCache();
-            if (ImGui::Checkbox("Jumping", &Quirks::Jumping)) clearCoreCache();
-            if (ImGui::Checkbox("Clipping", &Quirks::Clipping)) clearCoreCache();
-            if (ImGui::Checkbox("Memory Increment", &Quirks::MemoryIncrement)) clearCoreCache();
+            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCache();
+            if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCache();
+            if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCache();
+            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCache();
+            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCache();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -497,7 +523,7 @@ void renderImGUI()
 
             if (ImGui::Button("Reset to Default"))
             {
-                Quirks::Reset();
+                s.quirks = {};
                 clearCoreCache();
             }
 
@@ -549,7 +575,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     {
         if (key == GLFW_KEY_ESCAPE)
         {
-            loadROM(currentROMPAth);
+            loadROM(currentRomPath);
             return;
         }
         if (key == GLFW_KEY_TAB)
@@ -748,7 +774,7 @@ int main()
         {
             executeTimer -= FRAME_RATE;
 
-            if (!paused && chipCore->isRomLoaded())
+            if (!paused)
             {
                 chipCore->updateTimers();
 
@@ -756,21 +782,7 @@ int main()
                     continue;
 
                 for (int i = 0; i < IPF; )
-                {
-                    switch (currentCore())
-                    {
-                    case CHIPCore::JIT:
-                        i += chipJITCore.execute();
-                        break;
-                    case CHIPCore::Cached:
-                        i += chipCachedCore.execute();
-                        break;
-                    case CHIPCore::Interpret:
-                        chipInterpretCore.execute();
-                        i++;
-                        break;
-                    }
-                }
+                    i += chipCore->execute();
             }
         }
 
@@ -778,15 +790,14 @@ int main()
         {
             if (unlimitedMode)
             {
-                threadSafeExec([&]()
-                { 
-                    const std::string mipsStr { toMIPSstring(executedInstructions / secondsTimer) };
-                    instrPerSecondStr = "Instructions per second: " + mipsStr;
-                    executedInstructions = 0;
+                setInstructions = true;
+                threadSafeExec([&]() {});
 
-                    const std::string title { std::string(APP_NAME) + " (" + mipsStr + ")" };
-                    glfwSetWindowTitle(window, title.c_str());
-                });
+                statStr = getStatStr(executedInstructions / secondsTimer);
+                executedInstructions = 0;
+
+                const std::string title { std::string(APP_NAME) + " (" + statStr + ")" };
+                glfwSetWindowTitle(window, title.c_str());
             }
 
             secondsTimer = 0;

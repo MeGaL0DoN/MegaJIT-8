@@ -10,13 +10,13 @@ static ma_waveform waveForm;
 
 void sound_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
-	if (ChipCore::enableAudio && s.soundTimer > 0)
+	if (ChipCore::EnableAudio && s.soundTimer > 0)
 		ma_waveform_read_pcm_frames(&waveForm, pOutput, frameCount, nullptr);
 }
 
 void ChipCore::initAudio()
 {
-	enableAudio = true;
+	EnableAudio = true;
 
 	constexpr double initialVolume = 0.5;
 	constexpr int frequency = 440;
