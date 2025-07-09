@@ -95,14 +95,6 @@ std::string getStatStr(uint64_t instrs)
     return oss.str();
 }
 
-void copyChipScreenBuf()
-{
-    const auto& screenBuf{ chipCore->getScreenBuffer() };
-
-    for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
-        textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
-}
-
 void setBuffers()
 {
     unsigned int VAO, VBO, EBO;
@@ -247,21 +239,12 @@ void threadSafeExec(Op func)
         func();
 }
 
-void clearCoreCache()
+void clearCoreCaches()
 {
     threadSafeExec([&]
     {
-        switch (currentCore())
-        {
-            case CoreType::Interpret:
-                return;
-            case CoreType::Cached:
-                chipCachedCore.clearCache();
-                break;
-            case CoreType::JIT:
-                chipJITCore.clearJITCache();
-                break;
-        }
+        chipJITCore.clearJITCache();
+        chipCachedCore.clearCache();
     });
 }
 
@@ -281,6 +264,18 @@ void changePauseState()
         chipCore->resetKeys();
 }
 
+void load1dcell()
+{
+    std::stringbuf buf { std::ios::in | std::ios::out };
+    buf.sputn(reinterpret_cast<const char*>(Resources::ROM_1DCELL), sizeof(Resources::ROM_1DCELL));
+    std::istream st { &buf };
+
+    threadSafeExec([&]
+    {
+        chipCore->loadROM(st);
+    });
+}
+
 void loadROM(const std::filesystem::path& path)
 {
     threadSafeExec([&]
@@ -290,7 +285,7 @@ void loadROM(const std::filesystem::path& path)
         if (chipCore->loadROM(st))
         {
             currentRomPath = path;
-            clearCoreCache();
+            clearCoreCaches();
 
             if (paused)
                 changePauseState();
@@ -353,8 +348,8 @@ void renderImGUI()
             ImGui::Separator();
             ImGui::Spacing();
 
-            static ImVec4 foregroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-            static ImVec4 backgroundColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+            static ImVec4 foregroundColor { ImVec4(1.0f, 1.0f, 1.0f, 1.0f) };
+            static ImVec4 backgroundColor { ImVec4(0.0f, 0.0f, 0.0f, 1.0f) };
 
             if (!enableRainbow)
             {
@@ -421,8 +416,7 @@ void renderImGUI()
             {
                 if (ImGui::Button("JIT"))
                 {
-                    chipCore = &chipCachedCore;
-                    chipCachedCore.clearCache();
+                    chipCore = &chipInterpretCore;
                     coreModeChanged();
                 }
 
@@ -441,7 +435,7 @@ void renderImGUI()
                 }
 
                 if (ImGui::Button("Clear Cache"))
-                    clearCoreCache();
+                    chipJITCore.clearJITCache();
             }
             else
             {
@@ -449,8 +443,8 @@ void renderImGUI()
                 {
                     if (ImGui::Button("Interpreter"))
                     {
-                        chipCore = &chipJITCore;
-                        chipJITCore.clearJITCache();
+                        chipCore = &chipCachedCore;
+                        chipCachedCore.clearCache();
                         coreModeChanged();
                     }
                 }
@@ -458,14 +452,15 @@ void renderImGUI()
                 {
                     if (ImGui::Button("Cached Interpret"))
                     {
-                        chipCore = &chipInterpretCore;
+                        chipCore = &chipJITCore;
+                        chipJITCore.clearJITCache();
                         coreModeChanged();
                     }
 
                     ImGui::SeparatorText("Actions");
 
                     if (ImGui::Button("Clear Cache"))
-                        clearCoreCache();
+                        chipCachedCore.clearCache();
                 }
             }
 
@@ -473,11 +468,11 @@ void renderImGUI()
 
             if (ImGui::Checkbox("Unlimited Mode", &unlimitedMode))
             {
-                chipCachedCore.setSlowMode(!unlimitedMode);
-                chipJITCore.setSlowMode(!unlimitedMode);
-
                 if (unlimitedMode)
                 {
+                    chipCachedCore.setSlowMode(false);
+                    chipJITCore.setSlowMode(false);
+
                     if (!paused)
                         startCoreThread();
                 }
@@ -486,7 +481,22 @@ void renderImGUI()
                     if (!paused)
                         stopCoreThread();
 
+                    chipCachedCore.setSlowMode(true);
+                    chipJITCore.setSlowMode(true);
+
                     glfwSetWindowTitle(window, APP_NAME);
+                }
+            }
+
+            if (unlimitedMode && !currentRomPath.empty())
+            {
+                ImGui::SameLine();
+
+                if (ImGui::Button("Bench"))
+                {
+                    clearCoreCaches();
+                    load1dcell();
+                    currentRomPath.clear();
                 }
             }
 
@@ -504,11 +514,11 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCache();
-            if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCache();
-            if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCache();
-            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCache();
-            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCache();
+            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCaches();
+            if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCaches();
+            if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCaches();
+            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCaches();
+            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCaches();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -517,7 +527,7 @@ void renderImGUI()
             if (ImGui::Button("Reset to Default"))
             {
                 s.quirks = {};
-                clearCoreCache();
+                clearCoreCaches();
             }
 
             ImGui::EndMenu();
@@ -532,6 +542,14 @@ void renderImGUI()
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void copyChipScreenBuf()
+{
+    const auto& screenBuf { chipCore->getScreenBuffer() };
+
+    for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
+        textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
 }
 
 void render()
@@ -648,7 +666,7 @@ inline std::filesystem::path getExecutablePath()
 #endif
 #endif
 
-    const std::filesystem::path path{ pathBuf };
+    const std::filesystem::path path { pathBuf };
     return path.parent_path();
 }
 
@@ -723,11 +741,11 @@ void setImGUI()
 {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io { ImGui::GetIO() };
     io.IniFilename = nullptr;
 
-    const int resolutionX = glfwGetVideoMode(glfwGetPrimaryMonitor())->width;
-    const float scaleFactor = (resolutionX / 1920.0f);
+    const int resolutionX { glfwGetVideoMode(glfwGetPrimaryMonitor())->width };
+    const float scaleFactor { resolutionX / 1920.0f };
 
     io.Fonts->AddFontFromMemoryCompressedTTF((void*)Resources::ROBOTO_MONO_FONT, sizeof(Resources::ROBOTO_MONO_FONT), scaleFactor * 17);
     ImGui::GetStyle().ScaleAllSizes(scaleFactor);
@@ -748,12 +766,7 @@ int main()
     setBuffers();
 
     std::thread initThread { ChipCore::initAudio };
-
-    std::stringbuf buf { std::ios::in | std::ios::out };
-    buf.sputn(reinterpret_cast<const char*>(Resources::ROM_1DCELL), sizeof(Resources::ROM_1DCELL));
-    std::istream st { &buf };
-    chipCore->loadROM(st);
-
+    load1dcell();
     startCoreThread();
 
     double lastTime { glfwGetTime() }, executeTimer{}, secondsTimer{};

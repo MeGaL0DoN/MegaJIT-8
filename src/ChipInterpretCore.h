@@ -27,16 +27,16 @@ public:
 
 		#define skipInstr() s.pc += 2
 
-		switch (opcode & 0xF000)
+		switch (opcode >> 12)
 		{
-		case 0x0000:
+		case 0x0:
 		{
 			switch (nnn)
 			{
-			case 0x00E0: 
+			case 0x0E0: 
 				std::memset(s.screenBuffer.data(), 0, sizeof(s.screenBuffer));
 				break;
-			case 0x00EE: 
+			case 0x0EE: 
 				s.pc = s.stack[--s.sp];
 				break;
 			default:
@@ -46,23 +46,23 @@ public:
 			}
 			break;
 		}
-		case 0x1000: 
+		case 0x1:
 			s.pc = nnn;
 			break;  
-		case 0x2000:
+		case 0x2:
 			s.stack[s.sp++] = s.pc;
 			s.pc = nnn;
 			break;
-		case 0x3000:
+		case 0x3:
 			if (regX == nn) skipInstr();
 			break;
-		case 0x4000:
+		case 0x4:
 			if (regX != nn) skipInstr();
 			break;
-		case 0x5000:
+		case 0x5:
 			switch (n)
 			{
-			case 0x0000:
+			case 0x0:
 				if (regX == regY) skipInstr();
 				break;
 			default:
@@ -71,13 +71,13 @@ public:
 				break;
 			}
 			break;
-		case 0x6000:
+		case 0x6:
 			regX = nn;
 			break;
-		case 0x7000: 
+		case 0x7: 
 			regX += nn;
 			break;
-		case 0x8000:
+		case 0x8:
 			switch (n)
 			{
 			case 0x0:
@@ -134,7 +134,7 @@ public:
 				break;
 			}
 			break;
-		case 0x9000:
+		case 0x9:
 			switch (n)
 			{
 			case 0x0:
@@ -146,20 +146,20 @@ public:
 				break;
 			}
 			break;
-		case 0xA000:
+		case 0xA:
 			s.I = nnn;
 			break;
-		case 0xB000:
+		case 0xB:
 			if (s.quirks.jumping) s.pc = regX + nnn;
 			else s.pc = s.V[0] + nnn;
 			break;
-		case 0xC000:
+		case 0xC:
 			regX = rng(eng) & nn;
 			break;
-		case 0xD000: 
+		case 0xD: 
 			drawSprite(regX & (ChipState::SCR_WIDTH - 1), regY & (ChipState::SCR_HEIGHT - 1), n);
 			break;
-		case 0xE000:
+		case 0xE:
 			switch (nn)
 			{
 			case 0x9E:
@@ -174,7 +174,7 @@ public:
 				break;
 			}
 			break;
-		case 0xF000:
+		case 0xF:
 			switch (nn)
 			{
 			case 0x07:
@@ -255,35 +255,22 @@ private:
 	std::default_random_engine eng { std::random_device{}() };
 	std::uniform_int_distribution<> rng { 0, 255 };
 
-	void drawSprite(uint8_t x, uint8_t y, uint8_t height)
+	inline void drawSprite(uint8_t x, uint8_t y, uint8_t height)
 	{
 		s.V[0xF] = 0;
-		const bool partialDraw { x > 56 };
 
 		for (int i = 0; i < height; i++)
 		{
-			const uint8_t spriteRow { s.RAM[s.I + i] };
+			const auto sprite { static_cast<uint64_t>(s.RAM[s.I + i]) << 56 };
 			uint64_t spriteMask;
 
-			if (partialDraw)
-			{
-				const uint64_t leftPart { static_cast<uint64_t>(spriteRow) >> (x - 56) };
-
-				if (s.quirks.clipping)
-					spriteMask = leftPart;
-				else
-				{
-					const uint64_t rightPart { static_cast<uint64_t>(spriteRow) << (64 - (x - 56)) };
-					spriteMask = leftPart | rightPart;
-				}
-			}
+			if (s.quirks.clipping)
+				spriteMask = sprite >> x;
 			else
-				spriteMask = static_cast<uint64_t>(spriteRow) << (63 - x - 7);
+				spriteMask = (sprite << (64 - x)) | (sprite >> x);
 
-			uint64_t& screenRow { s.screenBuffer[y] };
-			s.V[0xF] |= ((screenRow & spriteMask) != 0);
-
-			screenRow ^= spriteMask;
+			s.V[0xF] |= ((s.screenBuffer[y] & spriteMask) != 0);
+			s.screenBuffer[y] ^= spriteMask;
 
 			if (s.quirks.clipping)
 			{

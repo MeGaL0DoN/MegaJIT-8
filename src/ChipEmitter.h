@@ -24,9 +24,16 @@ private:
 	size_t codeStartOffset{};
 
 	Xbyak::util::Cpu cpuCaps;
-	bool avxSupport{ false };
+	bool avxSupport;
+
+	inline void checkCPUSupport()
+	{
+		cpuCaps = Xbyak::util::Cpu();
+		avxSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
+	}
 
 	const Xbyak::Reg8* vreg { nullptr };
+
 	const Xbyak::Reg64& V_REG64(uint8_t num);
 	bool GET_VREG(uint8_t num);
 
@@ -81,12 +88,6 @@ private:
 	void callFunc(uint64_t func);
 	void emitBlockInvalidation(int count, uint16_t pc);
 	void emitUncompiledBlockHandler();
-
-	inline void checkCPUSupport()
-	{
-		cpuCaps = Xbyak::util::Cpu();
-		avxSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
-	}
 
 public:
 	static constexpr size_t MAX_CACHE_SIZE { 262144 };

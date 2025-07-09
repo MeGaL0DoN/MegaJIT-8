@@ -36,7 +36,15 @@ constexpr int MAX_ALLOC_REGS { 5 };
 #define I_REG64 r15
 #define FLAG_REG V_REG(0xF)
 
-constexpr int WIN_SHADOW_SPACE{ 32 };
+constexpr int WIN_SHADOW_SPACE { 32 };
+
+template <typename F>
+uint64_t funcAddr(F func)
+{
+	uint64_t addr;
+	std::memcpy(&addr, &func, sizeof(addr));
+	return addr;
+}
 
 void ChipEmitter::reset()
 {
@@ -51,13 +59,9 @@ void ChipEmitter::reset()
 
 void ChipEmitter::emitUncompiledBlockHandler()
 {
-	uint64_t addr;
-	const auto ptr { &ChipJITCore::compileBlock };
-	std::memcpy(&addr, &ptr, sizeof(addr));
-
 	sub(rsp, WIN_SHADOW_SPACE + 8);
 	mov(ARG1, reinterpret_cast<uint64_t>(&core));
-	mov(rax, addr);
+	mov(rax, funcAddr(&ChipJITCore::compileBlock));
 	call(rax);
 	add(rsp, WIN_SHADOW_SPACE + 8);
 	ret();
@@ -108,11 +112,7 @@ void ChipEmitter::emitBlockInvalidation(int count, uint16_t pc)
 	mov(ARG1, reinterpret_cast<uint64_t>(&core));
 	movzx(ARG2, I_REG);
 	lea(ARG3, ptr[ARG2 + count]);
-
-	uint64_t addr;
-	const auto ptr { &ChipJITCore::invalidateBlocks };
-	std::memcpy(&addr, &ptr, sizeof(addr));
-	callFunc(addr);
+	callFunc(funcAddr(&ChipJITCore::invalidateBlocks));
 
 	Xbyak::Label noSelfModifyingCode;
 	test(al, al);
@@ -124,7 +124,8 @@ void ChipEmitter::emitBlockInvalidation(int count, uint16_t pc)
 
 void ChipEmitter::emitIllegalOPHandler()
 {
-
+	mov(ARG1, reinterpret_cast<uint64_t>(&core));
+	callFunc(funcAddr(&ChipJITCore::illegalOpcodeHandler));
 }
 
 void ChipEmitter::emitBreakpoint() 
