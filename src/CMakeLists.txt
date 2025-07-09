@@ -19,16 +19,17 @@ add_executable(MegaJIT_8
         macros.h
         Shader.cpp
         Shader.h
-        ChipCore.cpp
         ChipCore.h
+        ChipCore.cpp
         ChipEmitter.h
+        ChipEmitter.cpp
         ChipJITCore.h 
         ChipCachedCore.h 
         ChipInterpretCore.h
-        ChipState.cpp
         ChipState.h
+        ChipState.cpp
         ChipJITState.h
-        ChipCachedState.h  "ChipEmitter.cpp")
+        ChipCachedState.h )
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)

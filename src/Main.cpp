@@ -65,6 +65,7 @@ bool paused { false };
 bool enableRainbow { false };
 Shader pixelShader{};
 uint32_t chipTexture;
+std::array<uint8_t, ChipState::SCR_HEIGHT* ChipState::SCR_WIDTH> textureBuf;
 
 int viewportWidth, viewportHeight;
 int menuBarHeight;
@@ -94,36 +95,12 @@ std::string getStatStr(uint64_t instrs)
     return oss.str();
 }
 
-template <typename Op>
-void threadSafeExec(Op func)
+void copyChipScreenBuf()
 {
-    if (coreThreadRunning)
-    {
-        executeCore = false;
-        while (!stoppedExecuting) {};
+    const auto& screenBuf{ chipCore->getScreenBuffer() };
 
-        func();
-        executeCore = true;
-        stoppedExecuting = false;
-    }
-    else
-        func();
-}
-
-std::array<uint8_t, ChipState::SCR_HEIGHT * ChipState::SCR_WIDTH> textureBuf;
-
-void draw()
-{
-    const auto& screenBuf { chipCore->getScreenBuffer() };
-
-    threadSafeExec([&]
-    {
-        for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
-            textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
-    });
-
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    for (int i = 0; i < ChipState::SCR_WIDTH * ChipState::SCR_HEIGHT; i++)
+        textureBuf[i] = (screenBuf[i >> 6] >> (63 - (i & 0x3F))) & 0x1;
 }
 
 void setBuffers()
@@ -252,6 +229,22 @@ void coreModeChanged()
         stopCoreThread();
         startCoreThread();
     }
+}
+
+template <typename Op>
+void threadSafeExec(Op func)
+{
+    if (coreThreadRunning)
+    {
+        executeCore = false;
+        while (!stoppedExecuting) {};
+
+        func();
+        executeCore = true;
+        stoppedExecuting = false;
+    }
+    else
+        func();
 }
 
 void clearCoreCache()
@@ -544,7 +537,8 @@ void renderImGUI()
 void render()
 {
     glClear(GL_COLOR_BUFFER_BIT);
-    draw();
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     renderImGUI();
     glfwSwapBuffers(window);
 }
@@ -590,7 +584,12 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
          const auto keyInd { keyConfig.find(key) };
 
          if (keyInd != keyConfig.end())
-             chipCore->setKey(keyInd->second, action);
+         {
+             threadSafeExec([&]
+             {
+                 chipCore->setKey(keyInd->second, action);
+             });
+         }          
      }
 }
 
@@ -770,20 +769,28 @@ int main()
 
         glfwPollEvents();
 
-        while (executeTimer >= FRAME_RATE)
+        if (executeTimer >= FRAME_RATE)
         {
-            executeTimer -= FRAME_RATE;
-
-            if (!paused)
+            threadSafeExec([&]
             {
-                chipCore->updateTimers();
+                while (executeTimer >= FRAME_RATE)
+                {
+                    executeTimer -= FRAME_RATE;
 
-                if (unlimitedMode)
-                    continue;
+                    if (!paused)
+                    {
+                        chipCore->updateTimers();
 
-                for (int i = 0; i < IPF; )
-                    i += chipCore->execute();
-            }
+                        if (unlimitedMode)
+                            continue;
+
+                        for (int i = 0; i < IPF;)
+                            i += chipCore->execute();
+                    }
+                }
+
+                copyChipScreenBuf();
+            });
         }
 
         if (secondsTimer >= 1.0)
