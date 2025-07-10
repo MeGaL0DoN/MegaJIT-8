@@ -561,7 +561,7 @@ private:
 			const auto sprite { static_cast<uint64_t>(s.RAM[s.I + i]) << 56 };
 			uint64_t spriteMask;
 
-			if (s.quirks.clipping)
+			if constexpr (clipping)
 				spriteMask = sprite >> x;
 			else
 				spriteMask = (sprite << (64 - x)) | (sprite >> x);

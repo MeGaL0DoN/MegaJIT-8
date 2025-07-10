@@ -160,12 +160,9 @@ private:
 				switch (opcode & 0xFFF)
 				{
 				case 0x00EE:
-					// if (branch)
-					// 	break;
-					// return true;
-
-					// TODO allow conditional returns later (fix current cycle counting first)
-					return !branch;
+					if (branch)
+					 	break;
+					return true;
 				default:
 					break;
 				}
@@ -217,7 +214,7 @@ private:
 		switch (opcode & 0xF000)
 		{
 			case 0x0000:
-				return opcode == 0x00E0;
+				return opcode == 0x00EE;
 			case 0x1000:
 			case 0x2000:
 			case 0xB000:
@@ -308,8 +305,10 @@ private:
 				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
 				{
 					if (branch)
+					{
 						calculateAllFlags();
-
+						c.blockHasInstrSkips = true;
+					}
 					analyzeBlock(nnn);
 				}
 				else
@@ -483,9 +482,11 @@ private:
 		return pc;
 	}
 
-	inline uint16_t emitBlock(uint16_t pc, std::vector<uint8_t*>* inlinedSubCondRetPtrs = nullptr)
+	inline uint16_t emitBlock(uint16_t pc, bool insideBranch = false, std::vector<uint8_t*>* inlinedSubCondRetPtrs = nullptr)
 	{
 		const uint16_t startPC { pc };
+		const uint16_t startInstrCount { c.instructions };
+		const uint16_t startBranchCount { c.branchedInstrs };
 		bool flow { false };
 		uint8_t* branchEndPtr { nullptr };
 
@@ -512,6 +513,7 @@ private:
 		while ((c.instructions < instructionsPerBlock || branchEndPtr) && pc < 0xFFF)
 		{
 			const uint16_t prevInstrCount { c.instructions };
+			const uint16_t prevBranchCount { c.branchedInstrs };
 			c.instructions++;
 
 			bool inlinedBlock { false };
@@ -537,10 +539,14 @@ private:
 				case 0x00EE:
 					if (inlinedSubCondRetPtrs)
 					{
+						if (insideBranch)
+							c.emitInstrCountAdd((c.instructions - startInstrCount) - (c.branchedInstrs - startBranchCount));
+
 						if (branchEndPtr)
 						{
 							c.emitJumpPlaceholder();
 							inlinedSubCondRetPtrs->push_back(c.getCodeEndPtr());
+							inlinedBlock = true;
 						}
 						else
 						{
@@ -565,9 +571,8 @@ private:
 				{
 					if (branchEndPtr)
 					{
-						const uint16_t prevBranchedInstrs { c.branchedInstrs };
-						emitBlock(nnn);
-						c.branchedInstrs -= (c.branchedInstrs - prevBranchedInstrs);
+						emitBlock(nnn, true);
+						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
@@ -590,15 +595,13 @@ private:
 
 					if (branchEndPtr)
 					{
-						const uint16_t prevBranchedInstrs { c.branchedInstrs };
-						// TODO emit add!!
-						emitBlock(nnn, &condRetPtrs);					
-						c.branchedInstrs -= (c.branchedInstrs - prevBranchedInstrs);
+						emitBlock(nnn, true, &condRetPtrs);					
+						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-						emitBlock(nnn, &condRetPtrs);
+						emitBlock(nnn, false, &condRetPtrs);
 
 					for (const auto ptr : condRetPtrs)
 						c.patchBranchInstr(ptr, false);
@@ -662,7 +665,7 @@ private:
 			case 0x9000:
 				switch (n)
 				{
-				case 0:
+				case 0x0:
 					c.emit9XY0(x, y, !isFlow(pc));
 					BRANCH();
 				default:
@@ -686,10 +689,10 @@ private:
 			case 0xE000:
 				switch (nn)
 				{
-				case 0x009E:
+				case 0x9E:
 					c.emitEX9E(x, !isFlow(pc));
 					BRANCH();
-				case 0x00A1:
+				case 0xA1:
 					c.emitEXA1(x, !isFlow(pc));
 					BRANCH();
 				default:

@@ -65,8 +65,6 @@ void ChipEmitter::emitUncompiledBlockHandler()
 	call(rax);
 	add(rsp, WIN_SHADOW_SPACE + 8);
 	ret();
-
-	codeStartOffset = getSize();
 }
 
 void ChipEmitter::callFunc(uint64_t func)
@@ -253,12 +251,17 @@ void ChipEmitter::emitJumpPlaceholder()
 
 void ChipEmitter::patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch)
 {
-	constexpr auto INC_R64_SIZE{ 3 };
+	constexpr auto INC_R64_SIZE { 3 };
 	const auto offset { incBeforeBranch ? INC_R64_SIZE : 0 };
 
 	int32_t* jumpOffsetPtr { reinterpret_cast<int32_t*>(branchCodeEndPtr - offset - sizeof(int32_t)) };
 	const int32_t jumpOffset { static_cast<int32_t>(getCodeEndPtr() - branchCodeEndPtr + offset) };
 	*jumpOffsetPtr = jumpOffset;
+}
+
+void ChipEmitter::emitInstrCountAdd(uint16_t instrs)
+{
+	add(BRANCH_SKIP_REG, instrs);
 }
 
 #define quirks core.s.quirks
@@ -535,14 +538,15 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 	movzx(eax, V_REG(y));
 	and_(eax, (ChipState::SCR_HEIGHT - 1));
 
-	movzx(r8d, I_REG);
+	if (!IregAllocated)
+		movzx(r8d, I_REG);
 
 	if (calcFlag)
 		mov(FLAG_REG, 0);
 
 	for (int i = 0; i < n; i++)
 	{
-		movzx(edx, RAM_PTR(i + r8));
+		movzx(edx, RAM_PTR(i + (IregAllocated ? I_REG64 : r8)));
 
 		if (calcFlag)
 			mov(r9, SCREEN_PTR(rax));

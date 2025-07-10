@@ -9,7 +9,7 @@ extern bool paused;
 static ma_device soundDevice;
 static ma_waveform waveForm;
 
-constexpr double VOLUME_MULTIPLIER { 0.02 };
+constexpr double VOLUME_MULTIPLIER { 0.04 };
 
 void sound_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {

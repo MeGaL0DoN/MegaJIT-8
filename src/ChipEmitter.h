@@ -21,7 +21,9 @@ private:
 	std::vector<uint8_t> allocatedRegs{};
 	bool IregAllocated { false };
 	bool stackAligned { false };
+
 	size_t codeStartOffset{};
+	size_t burn100xCyclesFuncOffset{};
 
 	Xbyak::util::Cpu cpuCaps;
 	bool avxSupport;
@@ -103,6 +105,7 @@ public:
 	{
 		checkCPUSupport();
 		emitUncompiledBlockHandler();
+		codeStartOffset = getSize();
 	}
 
 	inline uint8_t* getCodePtr() const { return const_cast<uint8_t*>(getCode()); }
@@ -130,6 +133,7 @@ public:
 
 	void emitJumpPlaceholder();
 	void patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch);
+	void emitInstrCountAdd(uint16_t instsr);
 
 	void emit00E0();
 	void emit00EE();

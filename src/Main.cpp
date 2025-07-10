@@ -13,6 +13,7 @@
 #include <iostream>   
 #include <filesystem>
 #include <thread>
+#include <chrono>
 
 #include "Shader.h"
 #include "resources.h"
@@ -53,9 +54,10 @@ bool coreThreadRunning { false };
 std::atomic<bool> executeCore { false };
 std::atomic<bool> stoppedExecuting { false };
 
-bool setInstructions { false };
-uint64_t executedInstructions {};
-std::string statStr { "0000.000 MIPS | 00.000 MIPF" };
+bool setStats { false };
+uint64_t executedInstructions{};
+double cpuFrequency{};
+std::string statsStr { "0000.000 MIPS | 00.000 MIPF" };
 
 bool unlimitedMode { true };
 
@@ -84,15 +86,77 @@ bool fileDialogOpen { false };
 constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
 constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x86-64 Assembly"), STR("txt")} };
 
-std::string getStatStr(uint64_t instrs)
+std::string cpuBrandStr(48, '\0');
+Xbyak::CodeGenerator code{};
+
+void emitCPUNameGetter()
 {
-    const double mips { instrs / 1e6 };
-    const double mipf { mips / 60 };
+    code.push(code.rbx);
+    code.mov(code.r8, reinterpret_cast<uint64_t>(&cpuBrandStr[0]));
 
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3) << mips << " MIPS | " << mipf << " MIPF";
+    code.xor_(code.ecx, code.ecx);
+    code.mov(code.eax, 0x80000002);
+    code.cpuid();
+    code.mov(code.dword[code.r8 + 0], code.eax);
+    code.mov(code.dword[code.r8 + 4], code.ebx);
+    code.mov(code.dword[code.r8 + 8], code.ecx);
+    code.mov(code.dword[code.r8 + 12], code.edx);
 
-    return oss.str();
+    code.xor_(code.ecx, code.ecx);
+    code.mov(code.eax, 0x80000003);
+    code.cpuid();
+    code.mov(code.dword[code.r8 + 16], code.eax);
+    code.mov(code.dword[code.r8 + 20], code.ebx);
+    code.mov(code.dword[code.r8 + 24], code.ecx);
+    code.mov(code.dword[code.r8 + 28], code.edx);
+
+    code.xor_(code.ecx, code.ecx);
+    code.mov(code.eax, 0x80000004);
+    code.cpuid();
+    code.mov(code.dword[code.r8 + 32], code.eax);
+    code.mov(code.dword[code.r8 + 36], code.ebx);
+    code.mov(code.dword[code.r8 + 40], code.ecx);
+    code.mov(code.dword[code.r8 + 44], code.edx);
+
+    code.pop(code.rbx);
+    code.ret();
+}
+
+// Is guaranteed to take ~100 cycles per iteration on any x86-64 cpu since 'add eax, eax' sequence is fully dependent on previous results.
+void emitBurn100xCyclesFunc()
+{
+    Xbyak::Label loop;
+    code.L(loop);
+
+    for (int i = 0; i < 100; i++)
+        code.add(code.eax, code.eax);
+
+#ifdef _WIN32
+    code.dec(code.ecx);
+#else
+    code.dec(code.edi);
+#endif
+    code.jnz(loop);
+
+    code.ret();
+}
+
+void emitCode()
+{
+    emitCPUNameGetter();
+    code.getCode<void(*)()>()();
+
+    const auto nul { std::find(cpuBrandStr.begin(), cpuBrandStr.end(), '\0') };
+    cpuBrandStr.erase(nul, cpuBrandStr.end());
+    const auto pos { cpuBrandStr.find_last_not_of(' ') };
+
+    if (pos == std::string::npos)
+        cpuBrandStr.clear();
+    else
+        cpuBrandStr.erase(pos + 1);
+
+    code.resetSize();
+    emitBurn100xCyclesFunc();
 }
 
 void setBuffers()
@@ -173,11 +237,18 @@ void coreThreadExecute()
             }
         }
 
-        if (setInstructions)
+        if (setStats)
         {
+            constexpr int EXECUTE_CYCLES { 100000 };
+
+            const auto start { std::chrono::high_resolution_clock::now() };
+            code.getCode<void(*)(int)>()(EXECUTE_CYCLES / 100);
+            const auto elapsed { std::chrono::high_resolution_clock::now() - start };
+
+            cpuFrequency = EXECUTE_CYCLES / static_cast<double>(elapsed.count());
             executedInstructions = localInstructions;
             localInstructions = 0;
-            setInstructions = false;
+            setStats = false;
         }
 
         stoppedExecuting = true;
@@ -505,7 +576,7 @@ void renderImGUI()
             ImGui::Spacing();
 
             if (unlimitedMode)
-                ImGui::Text("Stats: %s", statStr.c_str());
+                ImGui::Text("Stats: %s", statsStr.c_str());
             else
                 ImGui::SliderInt("IPF", &IPF, 1, 100);
 
@@ -764,6 +835,7 @@ int main()
     NFD_Init();
     setWindowSize();
     setBuffers();
+    emitCode();
 
     std::thread initThread { ChipCore::initAudio };
     load1dcell();
@@ -810,14 +882,29 @@ int main()
         {
             if (unlimitedMode)
             {
-                setInstructions = true;
-                threadSafeExec([&]() {});
+                std::ostringstream oss;
 
-                statStr = getStatStr(executedInstructions / secondsTimer);
-                executedInstructions = 0;
+                if (!paused)
+                {
+                    setStats = true;
+                    threadSafeExec([&]() {});
+                    executedInstructions /= secondsTimer;
+                }
+                else
+                    executedInstructions = 0;
 
-                const std::string title { std::string(APP_NAME) + " (" + statStr + ")" };
-                glfwSetWindowTitle(window, title.c_str());
+                const double mips { executedInstructions / 1e6 };
+                const double mipf { mips / 60 };
+                oss << std::fixed << std::setprecision(3) << APP_NAME << " (" << mips << " MIPS) | " << cpuBrandStr;
+
+                if (!paused)
+                    oss << " | " << cpuFrequency << " GHz";;
+
+                glfwSetWindowTitle(window, oss.str().c_str());
+                
+                oss.str("");
+                oss << mips << " MIPS | " << mipf << " MIPF";
+                statsStr = oss.str();
             }
 
             secondsTimer = 0;
