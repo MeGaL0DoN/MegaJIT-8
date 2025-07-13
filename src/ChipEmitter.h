@@ -18,15 +18,26 @@ class ChipEmitter : Xbyak::CodeGenerator
 private:
 	ChipJITCore& core;
 
-	std::vector<uint8_t> allocatedRegs{};
+	std::array<uint8_t, 16> allocatedVRegs{};
 	bool IregAllocated { false };
 	bool stackAligned { false };
 
-	size_t codeStartOffset{};
-	size_t burn100xCyclesFuncOffset{};
+	static constexpr int MAX_ALLOC_REGS { 7 };
+	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
+
+	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { bl, bpl, sil, dil, r12b, r13b, r14b };
+	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { ebx, ebp, esi, edi, r12d, r13d, r14d };
+	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rbx, rbp, rsi, rdi, r12, r13, r14 };
+
+#ifdef _WIN32
+	static constexpr std::array CALLER_SAVED_V_REGS { false, false, false, false, false, false, false };
+#else
+	static constexpr std::array CALLER_SAVED_V_REGS { true, true, false, false, false, false, false };
+#endif
 
 	Xbyak::util::Cpu cpuCaps;
 	bool avxSupport;
+	size_t codeStartOffset{};
 
 	inline void checkCPUSupport()
 	{
@@ -34,15 +45,10 @@ private:
 		avxSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
 	}
 
-	const Xbyak::Reg8* vreg { nullptr };
-
-	const Xbyak::Reg64& V_REG64(uint8_t num);
-	bool GET_VREG(uint8_t num);
-
 	template <typename Op>
 	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
 	{
-		if (op1.isREG() || op2.isREG())
+		if (!op1.isMEM() || !op2.isMEM())
 			op(op1, op2);
 		else
 		{
@@ -94,8 +100,8 @@ private:
 public:
 	static constexpr size_t MAX_CACHE_SIZE { 262144 };
 
-	std::array<uint32_t, 16> VRegUsage{};
-	uint8_t IRegUsage { 0 };
+	std::array<uint16_t, 16> VRegUsage{};
+	uint16_t IRegUsage { 0 };
 
 	uint16_t instructions { 0 };
 	uint16_t branchedInstrs { 0 };
@@ -131,9 +137,12 @@ public:
 	void emitIllegalOPHandler();
 	void emitBreakpoint();
 
-	void emitJumpPlaceholder();
+	uint8_t* emitJumpPlaceholder();
+	void emitInstrCountAddPlaceholder();
+	void emitInstrCountAdd(int32_t instrs);
+
 	void patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch);
-	void emitInstrCountAdd(uint16_t instsr);
+	void patchAddImm32(uint8_t* addCodeEndPtr, int32_t imm);
 
 	void emit00E0();
 	void emit00EE();

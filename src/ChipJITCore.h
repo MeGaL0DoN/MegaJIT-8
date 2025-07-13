@@ -86,6 +86,13 @@ private:
 	static constexpr size_t BLOCK_MAX_INSTR { 255 };
 	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
 
+	struct retPoint
+	{
+		uint8_t* codePtr;
+		uint16_t instrCount;
+		uint16_t branchCount;
+	};
+
 	void initialize() override
 	{
 		s.reset();
@@ -226,7 +233,7 @@ private:
 		}
 	}
 
-	inline uint16_t analyzeBlock(uint16_t pc)
+	inline uint16_t analyzeBlock(uint16_t pc, bool inSubroutine = false)
 	{
 		const uint16_t startPC { pc };
 		bool branch { false }, flow { false };
@@ -285,6 +292,9 @@ private:
 				switch (nnn)
 				{
 				case 0x00EE:
+					if (branch && inSubroutine)
+						c.blockHasInstrSkips = true;
+
 					handleFlow();
 					break;
 				}
@@ -309,7 +319,7 @@ private:
 						calculateAllFlags();
 						c.blockHasInstrSkips = true;
 					}
-					analyzeBlock(nnn);
+					analyzeBlock(nnn, true);
 				}
 				else
 					handleFlow();
@@ -482,7 +492,7 @@ private:
 		return pc;
 	}
 
-	inline uint16_t emitBlock(uint16_t pc, bool insideBranch = false, std::vector<uint8_t*>* inlinedSubCondRetPtrs = nullptr)
+	inline uint16_t emitBlock(uint16_t pc, bool insideBranch = false, std::vector<retPoint>* inlinedSubCondRetPoints = nullptr)
 	{
 		const uint16_t startPC { pc };
 		const uint16_t startInstrCount { c.instructions };
@@ -537,15 +547,17 @@ private:
 					c.emit00E0();
 					break;
 				case 0x00EE:
-					if (inlinedSubCondRetPtrs)
+					if (inlinedSubCondRetPoints)
 					{
-						if (insideBranch)
-							c.emitInstrCountAdd((c.instructions - startInstrCount) - (c.branchedInstrs - startBranchCount));
+						if (insideBranch) // + 1 because need to count the call instruction itself.
+							c.emitInstrCountAdd(1 + (c.instructions - startInstrCount) - (c.branchedInstrs - startBranchCount));
 
 						if (branchEndPtr)
 						{
-							c.emitJumpPlaceholder();
-							inlinedSubCondRetPtrs->push_back(c.getCodeEndPtr());
+							if (!insideBranch)
+								c.emitInstrCountAddPlaceholder(); // to later subtract the number of remaining instructions in the subroutine.
+
+							inlinedSubCondRetPoints->emplace_back(c.emitJumpPlaceholder(), c.instructions, c.branchedInstrs++);
 							inlinedBlock = true;
 						}
 						else
@@ -591,20 +603,29 @@ private:
 			case 0x2000:
 				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
 				{
-					std::vector<uint8_t*> condRetPtrs{};
+					std::vector<retPoint> condRetPoints{};
 
 					if (branchEndPtr)
 					{
-						emitBlock(nnn, true, &condRetPtrs);					
+						emitBlock(nnn, true, &condRetPoints);					
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-						emitBlock(nnn, false, &condRetPtrs);
+						emitBlock(nnn, false, &condRetPoints);
 
-					for (const auto ptr : condRetPtrs)
-						c.patchBranchInstr(ptr, false);
+					for (const auto& p : condRetPoints)
+					{
+						c.patchBranchInstr(p.codePtr, false);
+
+						if (!branchEndPtr)
+						{
+							const int32_t skippedInstrs = (c.instructions - p.instrCount) - (c.branchedInstrs - p.branchCount);
+							// jmp opcode is 1 byte (0x9E) + 4 bytes jump displacement
+							c.patchAddImm32(p.codePtr - sizeof(int32_t) - 1, -skippedInstrs); 
+						}
+					}
 				}
 				else
 				{

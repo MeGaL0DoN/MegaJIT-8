@@ -17,9 +17,9 @@ public:
 		const uint16_t opcode = (s.RAM[s.pc] << 8) | s.RAM[s.pc + 1];
 		s.pc += 2;
 
-		#define nnn (opcode & 0x0FFF)
-		#define nn (opcode & 0x00FF)
-		#define n (opcode & 0x000F)
+		#define nnn (opcode & 0xFFF)
+		#define nn (opcode & 0xFF)
+		#define n (opcode & 0xF)
 
 		#define x ((opcode & 0x0F00) >> 8)
 		#define regX s.V[x]
@@ -269,7 +269,9 @@ private:
 			else
 				spriteMask = (sprite << (64 - x)) | (sprite >> x);
 
-			s.V[0xF] |= ((s.screenBuffer[y] & spriteMask) != 0);
+			if (s.screenBuffer[y] & spriteMask)
+				s.V[0xF] = 1;
+
 			s.screenBuffer[y] ^= spriteMask;
 
 			if (s.quirks.clipping)

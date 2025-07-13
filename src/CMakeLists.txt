@@ -14,7 +14,6 @@ endif()
 
 add_executable(MegaJIT_8 
         Main.cpp
-        
         resources.h
         macros.h
         Shader.cpp
@@ -22,7 +21,7 @@ add_executable(MegaJIT_8
         ChipCore.h
         ChipCore.cpp
         ChipEmitter.h
-        ChipEmitter.cpp
+	    ChipEmitter.cpp
         ChipJITCore.h 
         ChipCachedCore.h 
         ChipInterpretCore.h
@@ -58,8 +57,6 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             LINK_FLAGS_RELEASE "-s"
     )
 endif()
-
-file(COPY "../ROMs" DESTINATION ${CMAKE_BINARY_DIR})
 
 add_subdirectory("Libs/glad")
 target_link_libraries(MegaJIT_8 glad)

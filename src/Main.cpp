@@ -39,12 +39,12 @@ enum class CoreType
 
 CoreType currentCore()
 {
+    if (chipCore == &chipJITCore)
+        return CoreType::JIT;
     if (chipCore == &chipInterpretCore)
         return CoreType::Interpret;
     if (chipCore == &chipCachedCore)
         return CoreType::Cached;
-    if (chipCore == &chipJITCore)
-        return CoreType::JIT;
 
     UNREACHABLE();
 }
@@ -67,7 +67,7 @@ bool paused { false };
 bool enableRainbow { false };
 Shader pixelShader{};
 uint32_t chipTexture;
-std::array<uint8_t, ChipState::SCR_HEIGHT* ChipState::SCR_WIDTH> textureBuf;
+std::array<uint8_t, ChipState::SCR_HEIGHT * ChipState::SCR_WIDTH> textureBuf;
 
 int viewportWidth, viewportHeight;
 int menuBarHeight;
@@ -86,8 +86,8 @@ bool fileDialogOpen { false };
 constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
 constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x86-64 Assembly"), STR("txt")} };
 
-std::string cpuBrandStr(48, '\0');
 Xbyak::CodeGenerator code{};
+std::string cpuBrandStr(48, '\0');
 
 void emitCPUNameGetter()
 {
@@ -285,19 +285,10 @@ inline void stopCoreThread()
     coreThread.join();
 }
 
-void coreModeChanged()
-{
-    if (coreThreadRunning)
-    {
-        stopCoreThread();
-        startCoreThread();
-    }
-}
-
 template <typename Op>
 void threadSafeExec(Op func)
 {
-    if (coreThreadRunning)
+    if (executeCore)
     {
         executeCore = false;
         while (!stoppedExecuting) {};
@@ -310,13 +301,32 @@ void threadSafeExec(Op func)
         func();
 }
 
-void clearCoreCaches()
+void clearCoreCache()
 {
     threadSafeExec([&]
     {
-        chipJITCore.clearJITCache();
-        chipCachedCore.clearCache();
+        switch (currentCore())
+        {
+        case CoreType::JIT:
+            chipJITCore.clearJITCache();
+            break;
+        case CoreType::Cached:
+            chipCachedCore.clearCache();
+            break;
+        default:
+            break;
+        }
     });
+}
+
+void coreModeChanged()
+{
+    if (!coreThreadRunning)
+        return;
+
+    stopCoreThread();
+    clearCoreCache();
+    startCoreThread();
 }
 
 void changePauseState()
@@ -341,14 +351,19 @@ void load1dcell()
     buf.sputn(reinterpret_cast<const char*>(Resources::ROM_1DCELL), sizeof(Resources::ROM_1DCELL));
     std::istream st { &buf };
 
+    setStats = true;
+
     threadSafeExec([&]
     {
         chipCore->loadROM(st);
+        clearCoreCache();
     });
 }
 
 void loadROM(const std::filesystem::path& path)
 {
+    setStats = true;
+
     threadSafeExec([&]
     {
         auto st { std::ifstream { path, std::ios::binary } };
@@ -356,7 +371,7 @@ void loadROM(const std::filesystem::path& path)
         if (chipCore->loadROM(st))
         {
             currentRomPath = path;
-            clearCoreCaches();
+            clearCoreCache();
 
             if (paused)
                 changePauseState();
@@ -471,7 +486,6 @@ void renderImGUI()
                 pixelShader.setBool("rainbow", false);
 
                 ChipCore::EnableAudio = true;
-
                 volume = 50;
                 ChipCore::setVolume(0.5);
             }
@@ -500,13 +514,23 @@ void renderImGUI()
                     const nfdresult_t result { NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) };
 
                     if (result == NFD_OKAY)
-                        chipJITCore.dumpCode(outPath.get());
+                    {
+                        threadSafeExec([&]
+                        {
+                            chipJITCore.dumpCode(outPath.get());
+                        });
+                    }
 
                     fileDialogOpen = false;
                 }
 
                 if (ImGui::Button("Clear Cache"))
-                    chipJITCore.clearJITCache();
+                {
+                    threadSafeExec([&]
+                    {
+                        chipJITCore.clearJITCache();
+                    });
+                }
             }
             else
             {
@@ -515,7 +539,6 @@ void renderImGUI()
                     if (ImGui::Button("Interpreter"))
                     {
                         chipCore = &chipCachedCore;
-                        chipCachedCore.clearCache();
                         coreModeChanged();
                     }
                 }
@@ -524,14 +547,18 @@ void renderImGUI()
                     if (ImGui::Button("Cached Interpret"))
                     {
                         chipCore = &chipJITCore;
-                        chipJITCore.clearJITCache();
                         coreModeChanged();
                     }
 
                     ImGui::SeparatorText("Actions");
 
                     if (ImGui::Button("Clear Cache"))
-                        chipCachedCore.clearCache();
+                    {
+                        threadSafeExec([&]
+                        {
+                            chipCachedCore.clearCache();
+                        });
+                    }
                 }
             }
 
@@ -565,7 +592,6 @@ void renderImGUI()
 
                 if (ImGui::Button("Bench"))
                 {
-                    clearCoreCaches();
                     load1dcell();
                     currentRomPath.clear();
                 }
@@ -585,11 +611,11 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCaches();
-            if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCaches();
-            if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCaches();
-            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCaches();
-            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCaches();
+            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCache();
+            if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCache();
+            if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCache();
+            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCache();
+            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCache();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -598,7 +624,7 @@ void renderImGUI()
             if (ImGui::Button("Reset to Default"))
             {
                 s.quirks = {};
-                clearCoreCaches();
+                clearCoreCache();
             }
 
             ImGui::EndMenu();

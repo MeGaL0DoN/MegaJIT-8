@@ -566,7 +566,9 @@ private:
 			else
 				spriteMask = (sprite << (64 - x)) | (sprite >> x);
 
-			s.V[0xF] |= ((s.screenBuffer[y] & spriteMask) != 0);
+			if (s.screenBuffer[y] & spriteMask)
+				s.V[0xF] = 1;
+
 			s.screenBuffer[y] ^= spriteMask;
 
 			if constexpr (N != 1)
