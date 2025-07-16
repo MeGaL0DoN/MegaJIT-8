@@ -18,32 +18,42 @@ class ChipEmitter : Xbyak::CodeGenerator
 private:
 	ChipJITCore& core;
 
-	std::array<uint8_t, 16> allocatedVRegs{};
-	bool IregAllocated { false };
-	bool stackAligned { false };
-
-	static constexpr int MAX_ALLOC_REGS { 7 };
-	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
-
-	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { bl, bpl, sil, dil, r12b, r13b, r14b };
-	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { ebx, ebp, esi, edi, r12d, r13d, r14d };
-	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rbx, rbp, rsi, rdi, r12, r13, r14 };
-
-#ifdef _WIN32
-	static constexpr std::array CALLER_SAVED_V_REGS { false, false, false, false, false, false, false };
-#else
-	static constexpr std::array CALLER_SAVED_V_REGS { true, true, false, false, false, false, false };
-#endif
-
 	Xbyak::util::Cpu cpuCaps;
-	bool avxSupport;
-	size_t codeStartOffset{};
+	bool AVX, BMI2, AMD;
 
 	inline void checkCPUSupport()
 	{
 		cpuCaps = Xbyak::util::Cpu();
-		avxSupport = cpuCaps.has(Xbyak::util::Cpu::tAVX);
+		AVX = cpuCaps.has(Xbyak::util::Cpu::tAVX);
+		BMI2 = cpuCaps.has(Xbyak::util::Cpu::tBMI2);
+		AMD = cpuCaps.has(Xbyak::util::Cpu::tAMD);
 	}
+	
+	uint8_t* uncompiledBlockHandlerPtr;
+	uint8_t* dispatcherPtr;
+	uint64_t codeStartIndex;
+
+	int32_t executeFlagBaseOffset;
+	int32_t JITMapBaseOffset;
+	Xbyak::Label dispatcher, dispatcherEnd;
+
+	std::array<uint8_t, 16> allocatedVRegs{};
+	std::array<bool, 16> modifiedVRegs{};
+
+	static constexpr int MAX_ALLOC_REGS { 6  };
+	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
+
+	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { sil, dil, r9b, r10b, r11b, r15b };
+	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { esi, edi, r9d, r10d, r11d, r15d };
+	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rsi, rdi, r9, r10, r11, r15 };
+
+#ifdef _WIN32
+	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false };
+#else
+	static constexpr std::array CALLER_SAVED_V_REGS { true, true, true, true, true, false };
+#endif
+
+	void MOV_VREG_TO_32(Xbyak::Reg32 dst, uint8_t reg);
 
 	template <typename Op>
 	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
@@ -93,44 +103,43 @@ private:
 		});
 	}
 
-	void callFunc(uint64_t func);
+	bool emitSaveVregs();
+	void emitLoadVregs();
+	void emitCallFunc(uint64_t func, bool stackAligned);
+
 	void emitBlockInvalidation(int count, uint16_t pc);
 	void emitUncompiledBlockHandler();
+	void emitDispatcher();
 
 public:
-	static constexpr size_t MAX_CACHE_SIZE { 262144 };
+	static constexpr size_t MAX_CACHE_SIZE { 524288 };
 
-	std::array<uint16_t, 16> VRegUsage{};
-	uint16_t IRegUsage { 0 };
+	std::array<int, 16> VRegUsage{};
 
 	uint16_t instructions { 0 };
 	uint16_t branchedInstrs { 0 };
 	bool blockHasInstrSkips { false };
 
-	ChipEmitter(ChipJITCore& c) : Xbyak::CodeGenerator(MAX_CACHE_SIZE), core(c)
-	{
-		checkCPUSupport();
-		emitUncompiledBlockHandler();
-		codeStartOffset = getSize();
-	}
+	ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag);
 
 	inline uint8_t* getCodePtr() const { return const_cast<uint8_t*>(getCode()); }
 	inline uint8_t* getCodeEndPtr() const { return getCodePtr() + getSize(); }
 	inline size_t getCodeSize() const { return getSize(); }
 
+	uint8_t* getUncompiledPtr() const { return uncompiledBlockHandlerPtr; }
+
 	inline void clearCache()
 	{
-		setSize(codeStartOffset);
+		setSize(codeStartIndex);
 	}
 
-	FORCE_INLINE uint64_t execute(uint32_t offset) const
+	FORCE_INLINE uint64_t execute() const
 	{
-		return reinterpret_cast<uint64_t(*)()>(getCodePtr() + offset)();
+		return reinterpret_cast<uint64_t(*)()>(dispatcherPtr)();
 	}
 	
 	void reset();
 	void allocateRegs();
-
 	void emitPrologue();
 	void emitEpilogue(uint16_t pc = -1);
 

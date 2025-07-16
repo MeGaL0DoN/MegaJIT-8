@@ -23,19 +23,24 @@
 
 constexpr const char* APP_NAME { "MegaJIT-8" };
 
-ChipState s{};
-
-ChipInterpretCore chipInterpretCore { s };
-ChipCachedCore chipCachedCore { s };
-ChipJITCore chipJITCore { s };
-ChipCore* chipCore { &chipJITCore };
-
 enum class CoreType
 {
     Interpret,
     Cached,
     JIT
 };
+
+std::thread coreThread;
+bool coreThreadRunning { false };
+std::atomic<bool> executeCore { false };
+std::atomic<bool> stoppedExecuting { false };
+
+ChipState s{};
+
+ChipInterpretCore chipInterpretCore { s };
+ChipCachedCore chipCachedCore { s };
+ChipJITCore chipJITCore { s, executeCore };
+ChipCore* chipCore { &chipJITCore };
 
 CoreType currentCore()
 {
@@ -48,11 +53,6 @@ CoreType currentCore()
 
     UNREACHABLE();
 }
-
-std::thread coreThread;
-bool coreThreadRunning { false };
-std::atomic<bool> executeCore { false };
-std::atomic<bool> stoppedExecuting { false };
 
 bool setStats { false };
 uint64_t executedInstructions{};

@@ -67,8 +67,8 @@ target_link_libraries(MegaJIT_8 glfw)
 add_subdirectory("Libs/nativefiledialog-extended")
 target_link_libraries(MegaJIT_8 nfd)
 
-add_subdirectory("Libs/udis86")
-target_link_libraries(MegaJIT_8 udis86)
+add_subdirectory("Libs/zydis")
+target_link_libraries(MegaJIT_8 Zydis)
 
 add_subdirectory("Libs/ImGUI")
 target_link_libraries(MegaJIT_8 imgui)

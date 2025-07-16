@@ -4,9 +4,10 @@
 #include <vector>
 #include <ranges>
 #include <filesystem>
+#include <algorithm>
 #include <queue>
 
-#include <udis86.h>
+#include <Zydis/Zydis.h>
 
 #include "ChipCore.h"
 #include "ChipEmitter.h"
@@ -18,17 +19,18 @@ class ChipJITCore : public ChipCore
 public:
 	friend ChipEmitter;
 
-	ChipJITCore(ChipState& s) : ChipCore(s)
+	ChipJITCore(ChipState& s, std::atomic<bool>& executeFlag) : ChipCore(s), c(*this, executeFlag)
 	{}
 
 	FORCE_INLINE uint64_t execute() override
 	{
-		return c.execute(JIT.blockMap[s.pc]);
+		return c.execute();
 	}
 
 	void clearJITCache()
 	{
-		JIT.reset();
+		JIT.blocks.clear();
+		std::fill_n(JIT.blockMap.begin(), ChipState::RAM_SIZE, c.getUncompiledPtr());
 		c.clearCache();
 	}
 
@@ -40,44 +42,42 @@ public:
 
 	void dumpCode(const std::filesystem::path& path)
 	{
-		std::ofstream outFile { path, std::ios::out };
+		std::ofstream outFile{ path, std::ios::out };
 		if (!outFile) return;
 
-		if (!udInitialized)
-		{
-			ud_init(&ud);
-			ud_set_mode(&ud, 64);
-			ud_set_syntax(&ud, UD_SYN_INTEL);
-			udInitialized = true;
-		}
-
-		ud_set_pc(&ud, 0);
+		bool firstBlock { true };
+		ZyanU64 runtimeAddress { 0 };
 
 		for (const auto& block : JIT.blocks)
 		{
-			const auto offset { JIT.blockMap[block.pc] };
+			const auto buf { JIT.blockMap[block.pc] };
 
-			if (offset == 0)
+			if (buf == c.getUncompiledPtr())
 				continue;
 
+			if (!firstBlock)
+				outFile << "\n\n";
+
+			firstBlock = false;
+
 			outFile << "Block at PC: " << std::hex << "0x" << block.pc << "-0x" << block.pcRanges.back().second
-					<< "\n-----------------------------------------\n";
+					<< "\n-----------------------------------------";
 
-			ud_set_input_buffer(&ud, c.getCodePtr() + offset, block.cacheSize);
+			ZydisDisassembledInstruction instruction;
+			ZyanUSize offset = 0;
 
-			while (ud_disassemble(&ud))
-				outFile << "0x" << std::hex << std::setw(8) << std::setfill('0') << ud_insn_off(&ud) << " | " << ud_insn_asm(&ud) << '\n';
-
-			outFile << '\n';
+			while (ZYAN_SUCCESS(ZydisDisassembleIntel(ZYDIS_MACHINE_MODE_LONG_64, runtimeAddress, buf + offset, block.cacheSize - offset, &instruction))) 
+			{
+				outFile << "\n0x" << std::hex << std::setw(8) << std::setfill('0') << runtimeAddress << " | " << instruction.text;
+				offset += instruction.info.length;
+				runtimeAddress += instruction.info.length;
+			}
 		}
 	}
 
 private:
-	ud_t ud{};
-	bool udInitialized { false };
-
 	ChipJITState JIT{};
-	ChipEmitter c { *this };
+	ChipEmitter c;
 
 	JITBlock* block { nullptr };
 	std::queue<bool> blockFlagCalcList{};
@@ -99,7 +99,7 @@ private:
 		clearJITCache();
 	}
 
-	inline uint64_t compileBlock()
+	uint8_t* compileBlock(uint16_t pc)
 	{
 		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.8) };
 
@@ -108,10 +108,10 @@ private:
 
 		for (auto& b : JIT.blocks)
 		{
-			if (JIT.blockMap[b.pc] == 0)
+			if (JIT.blockMap[b.pc] == c.getUncompiledPtr())
 			{
 				block = &b;
-				block->pc = s.pc;
+				block->pc = pc;
 				block->pcRanges.clear();
 				break;
 			}
@@ -119,26 +119,26 @@ private:
 
 		if (block == nullptr)
 		{
-			JIT.blocks.emplace_back(s.pc);
+			JIT.blocks.emplace_back(pc);
 			block = &JIT.blocks.back();
 		}
 
 		blockFlagCalcList = {};
 
-		const auto offset { static_cast<uint32_t>(c.getCodeSize()) };
-		JIT.blockMap[s.pc] = offset;
+		const auto func { c.getCodeEndPtr() };
+		JIT.blockMap[pc] = func;
 
 		c.reset();
-		analyzeBlock(s.pc);
+		analyzeBlock(pc);
 		c.allocateRegs();
 		c.emitPrologue();
 
 		c.instructions = 0;
-		emitBlock(s.pc);
-		block->cacheSize = static_cast<uint32_t>(c.getCodeSize() - offset);
+		emitBlock(pc);
+		block->cacheSize = static_cast<uint32_t>(c.getCodeEndPtr() - func);
 		block = nullptr;
 
-		return c.execute(offset);
+		return func;
 	}
 
 	inline bool isInlinableJump(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
@@ -416,7 +416,6 @@ private:
 				branch = true;
 				continue;
 			case 0xA000:
-				c.IRegUsage++;
 				break;
 			case 0xB000:
 				c.VRegUsage[(s.quirks.jumping ? x : 0)]++;
@@ -426,7 +425,6 @@ private:
 				c.VRegUsage[x]++; 
 				c.VRegUsage[y]++; 
 				c.VRegUsage[0xF]++;
-				c.IRegUsage++;
 				setFlagOpCalcVal(x == 0xF || y == 0xF);
 				flagOps++;
 				break;
@@ -450,7 +448,6 @@ private:
 				case 0x1E:
 				case 0x29:
 				case 0x33:
-					c.IRegUsage++;
 					c.VRegUsage[x]++;
 
 					if (x == 0xF)
@@ -458,8 +455,6 @@ private:
 
 					break;
 				case 0x55:
-					c.IRegUsage += (s.quirks.memoryIncrement ? 2 : 1);
-
 					for (int i = 0; i <= x; i++)
 						c.VRegUsage[i]++;
 
@@ -469,8 +464,6 @@ private:
 					break;
 
 				case 0x65:
-					c.IRegUsage += (s.quirks.memoryIncrement ? 2 : 1);
-
 					for (int i = 0; i <= x; i++)
 						c.VRegUsage[i]++;
 
@@ -793,7 +786,7 @@ private:
 			{
 				if (range.first <= endAddr && range.second >= startAddr)
 				{
-					JIT.blockMap[block.pc] = 0;
+					JIT.blockMap[block.pc] = c.getUncompiledPtr();
 					invalidated = true;
 					break;
 				}
