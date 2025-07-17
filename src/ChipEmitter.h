@@ -38,7 +38,6 @@ private:
 	Xbyak::Label dispatcher, dispatcherEnd;
 
 	std::array<uint8_t, 16> allocatedVRegs{};
-	std::array<bool, 16> modifiedVRegs{};
 
 	static constexpr int MAX_ALLOC_REGS { 6  };
 	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
@@ -62,7 +61,7 @@ private:
 			op(op1, op2);
 		else
 		{
-			movzx(ecx, op2);
+			mov(cl, op2);
 			op(op1, cl);
 		}
 	}
@@ -114,11 +113,12 @@ private:
 public:
 	static constexpr size_t MAX_CACHE_SIZE { 524288 };
 
-	std::array<int, 16> VRegUsage{};
+	std::array<int, 16> VRegWeight{};
+	std::array<bool, 16> modifiedVRegs{};
+	std::array<bool, 16> initialValUseVRegs{};
 
 	uint16_t instructions { 0 };
 	uint16_t branchedInstrs { 0 };
-	bool blockHasInstrSkips { false };
 
 	ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag);
 
@@ -151,7 +151,7 @@ public:
 	void emitInstrCountAdd(int32_t instrs);
 
 	void patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch);
-	void patchAddImm32(uint8_t* addCodeEndPtr, int32_t imm);
+	void patchImm32(uint8_t* codeEndPtr, int32_t imm);
 
 	void emit00E0();
 	void emit00EE();

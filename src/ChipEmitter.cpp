@@ -71,12 +71,12 @@ void ChipEmitter::reset()
 	std::memset(allocatedVRegs.data(), NOT_ALLOCATED, sizeof(allocatedVRegs));
 	allocatedVRegs[0xF] = MAX_ALLOC_REGS - 1; // V[0xF] is always allocated in r15.
 
+	std::memset(VRegWeight.data(), 0, sizeof(VRegWeight));
 	std::memset(modifiedVRegs.data(), false, sizeof(modifiedVRegs)); 
-	std::memset(VRegUsage.data(), 0, sizeof(VRegUsage));
+	std::memset(initialValUseVRegs.data(), false, sizeof(initialValUseVRegs));
 
 	instructions = 0;
 	branchedInstrs = 0;
-	blockHasInstrSkips = false;
 }
 
 void ChipEmitter::emitUncompiledBlockHandler()
@@ -227,15 +227,15 @@ void ChipEmitter::emitBreakpoint()
 
 void ChipEmitter::allocateRegs()
 {
-	constexpr int ALLOC_THRESHOLD { 1 };
+	constexpr int ALLOC_THRESHOLD { 2 };
 
 	std::vector<std::pair<uint8_t, uint16_t>> usageList{};
 	usageList.reserve(16);
 
 	for (int i = 0; i < 15; i++)
 	{
-		if (VRegUsage[i] >= ALLOC_THRESHOLD)
-			usageList.push_back({ i, VRegUsage[i] });
+		if (VRegWeight[i] >= ALLOC_THRESHOLD)
+			usageList.push_back({ i, VRegWeight[i] });
 	}
 
 	std::sort(usageList.begin(), usageList.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
@@ -250,7 +250,7 @@ void ChipEmitter::emitPrologue()
 	{
 		const auto val { allocatedVRegs[i] };
 
-		if (val != NOT_ALLOCATED)
+		if (val != NOT_ALLOCATED && initialValUseVRegs[i])
 			movzx(V_REGS_32[val], REG_PTR(i));
 	}
 }
@@ -308,9 +308,9 @@ void ChipEmitter::emitInstrCountAddPlaceholder()
 {
 	add(INSTR_COUNT, INT32_MAX);
 }
-void ChipEmitter::patchAddImm32(uint8_t* addCodeEndPtr, int32_t imm)
+void ChipEmitter::patchImm32(uint8_t* codeEndPtr, int32_t imm)
 {
-	*reinterpret_cast<int32_t*>(addCodeEndPtr - sizeof(int32_t)) = imm;
+	*reinterpret_cast<int32_t*>(codeEndPtr - sizeof(int32_t)) = imm;
 }
 
 #define quirks core.s.quirks
@@ -431,12 +431,15 @@ void ChipEmitter::emit6XNN(uint8_t x, uint8_t val)
 {
 	const auto i { allocatedVRegs[x] };
 
-	if (val == 0 && i != NOT_ALLOCATED)
-		xor_(V_REGS_32[i], V_REGS_32[i]);
+	if (i != NOT_ALLOCATED)
+	{
+		if (val == 0)
+			xor_(V_REGS_32[i], V_REGS_32[i]);
+		else
+			mov(V_REGS_32[i], val);
+	}
 	else
-		mov(V_REG(x), val);
-
-	modifiedVRegs[x] = true;
+		mov(REG_PTR(x), val);
 }
 
 void ChipEmitter::emit7XNN(uint8_t x, uint8_t val)
@@ -445,7 +448,6 @@ void ChipEmitter::emit7XNN(uint8_t x, uint8_t val)
 		return;
 
 	add(V_REG(x), val);
-	modifiedVRegs[x] = true;
 }
 
 void ChipEmitter::emit8XY0(uint8_t x, uint8_t y)
@@ -455,12 +457,15 @@ void ChipEmitter::emit8XY0(uint8_t x, uint8_t y)
 
 	const auto xVal { allocatedVRegs[x] }, yVal { allocatedVRegs[y] };
 
-	if (xVal != NOT_ALLOCATED && yVal != NOT_ALLOCATED)
-		mov(V_REGS_32[xVal], V_REGS_32[yVal]);
+	if (xVal != NOT_ALLOCATED)
+	{
+		if (yVal != NOT_ALLOCATED)
+			mov(V_REGS_32[xVal], V_REGS_32[yVal]);
+		else
+			movzx(V_REGS_32[xVal], REG_PTR(y));
+	}
 	else
 		MOV(V_REG(x), V_REG(y));
-
-	modifiedVRegs[x] = true;
 }
 void ChipEmitter::emit8XY1(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -470,15 +475,10 @@ void ChipEmitter::emit8XY1(uint8_t x, uint8_t y, bool calcFlag)
 			OR(V_REG(x), V_REG(y));
 
 		if (calcFlag)
-		{
 			xor_(FLAG_REG_32, FLAG_REG_32);
-			modifiedVRegs[0xF] = 0;
-		}
 	}
 	else
 		OR(V_REG(x), V_REG(y));
-
-	modifiedVRegs[x] = true;
 }
 void ChipEmitter::emit8XY2(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -488,15 +488,10 @@ void ChipEmitter::emit8XY2(uint8_t x, uint8_t y, bool calcFlag)
 			AND(V_REG(x), V_REG(y));
 
 		if (calcFlag)
-		{
 			xor_(FLAG_REG_32, FLAG_REG_32);
-			modifiedVRegs[0xF] = 0;
-		}
 	}
 	else
-		OR(V_REG(x), V_REG(y));
-
-	modifiedVRegs[x] = true;
+		AND(V_REG(x), V_REG(y));
 }
 void ChipEmitter::emit8XY3(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -506,15 +501,10 @@ void ChipEmitter::emit8XY3(uint8_t x, uint8_t y, bool calcFlag)
 			XOR(V_REG(x), V_REG(y));
 
 		if (calcFlag)
-		{
 			xor_(FLAG_REG_32, FLAG_REG_32);
-			modifiedVRegs[0xF] = 0;
-		}
 	}
 	else
-		OR(V_REG(x), V_REG(y));
-
-	modifiedVRegs[x] = true;
+		XOR(V_REG(x), V_REG(y));
 }
 void ChipEmitter::emit8XY4(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -522,13 +512,9 @@ void ChipEmitter::emit8XY4(uint8_t x, uint8_t y, bool calcFlag)
 		return;
 
 	ADD(V_REG(x), V_REG(y));
-	modifiedVRegs[x] = true;
 
 	if (calcFlag)
-	{
 		setc(FLAG_REG);
-		modifiedVRegs[0xF] = true;
-	}
 }
 void ChipEmitter::emit8XY5(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -536,13 +522,9 @@ void ChipEmitter::emit8XY5(uint8_t x, uint8_t y, bool calcFlag)
 		return;
 
 	SUB(V_REG(x), V_REG(y));
-	modifiedVRegs[x] = true;
 
 	if (calcFlag)
-	{
 		setnc(FLAG_REG);
-		modifiedVRegs[0xF] = true;
-	}
 }
 void ChipEmitter::emit8XY6(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -554,7 +536,6 @@ void ChipEmitter::emit8XY6(uint8_t x, uint8_t y, bool calcFlag)
 				emit8XY0(x, y);
 
 			and_(FLAG_REG, 0x1);
-			modifiedVRegs[0xF] = true;
 		}
 	}
 	else
@@ -563,13 +544,9 @@ void ChipEmitter::emit8XY6(uint8_t x, uint8_t y, bool calcFlag)
 			emit8XY0(x, y);
 
 		shr(V_REG(x), 1);
-		modifiedVRegs[x] = true;
 
 		if (calcFlag)
-		{
 			setc(FLAG_REG);
-			modifiedVRegs[0xF] = true;
-		}
 	}
 }
 void ChipEmitter::emit8XY7(uint8_t x, uint8_t y, bool calcFlag)
@@ -581,15 +558,10 @@ void ChipEmitter::emit8XY7(uint8_t x, uint8_t y, bool calcFlag)
 	sub(al, V_REG(x));
 
 	if (x != 0xF)
-	{
 		mov(V_REG(x), al);
-		modifiedVRegs[x] = true;
-	}
+
 	if (calcFlag)
-	{
 		setnc(FLAG_REG);
-		modifiedVRegs[0xF] = true;
-	}
 }
 
 void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
@@ -602,7 +574,6 @@ void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
 				emit8XY0(x, y);
 
 			shr(FLAG_REG, 7);
-			modifiedVRegs[0xF] = true;
 		}
 	}
 	else
@@ -611,13 +582,9 @@ void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
 			emit8XY0(x, y);
 
 		shl(V_REG(x), 1);
-		modifiedVRegs[x] = true;
 
 		if (calcFlag)
-		{
 			setc(FLAG_REG);
-			modifiedVRegs[0xF] = true;
-		};
 	}
 }
 
@@ -629,16 +596,8 @@ void ChipEmitter::emitANNN(uint16_t val)
 void ChipEmitter::emitBNNN(uint16_t addr, uint8_t x)
 {
 	const auto reg { quirks.jumping ? x : 0 };
-	const auto val { allocatedVRegs[reg] };
-
-	if (val != NOT_ALLOCATED)
-		lea(PC_32, ptr[V_REGS_64[val] + addr]);
-	else
-	{
-		movzx(PC_32, REG_PTR(reg));
-		add(PC_32, addr);
-	}
-
+	movzx(PC_32, V_REG(reg));
+	add(PC_32, addr);
 	and_(PC_32, 0xFFF);
 }
 
@@ -647,7 +606,6 @@ void ChipEmitter::emitCXNN(uint8_t x, uint8_t val)
 	rdtsc(); // using cpu timestamp as a random number
 	and_(eax, val);
 	mov(V_REG(x), al);
-	modifiedVRegs[x] = true;
 }
 
 void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
@@ -726,7 +684,6 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 void ChipEmitter::emitFX07(uint8_t x)
 {
 	MOV(V_REG(x), byte[BASE + offsetof(ChipState, delayTimer)]);
-	modifiedVRegs[x] = true;
 }
 void ChipEmitter::emitFX15(uint8_t x)
 {
@@ -739,16 +696,8 @@ void ChipEmitter::emitFX18(uint8_t x)
 
 void ChipEmitter::emitFX1E(uint8_t x)
 {
-	const auto val { allocatedVRegs[x] };
-
-	if (val != NOT_ALLOCATED)
-		add(I_REG_32, V_REGS_32[val]);
-	else
-	{
-		movzx(eax, V_REG(x));
-		add(I_REG_32, eax);
-	}
-
+	movzx(eax, V_REG(x));
+	add(I_REG_32, eax);
 	and_(I_REG_32, 0xFFF);
 }
 
@@ -762,7 +711,7 @@ void ChipEmitter::emitFX29(uint8_t x)
 void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 {
 	Xbyak::Label end;
-	MOV_VREG_TO_32(eax, x);
+	movzx(eax, V_REG(x));
 
 	lea(edx, ptr[rax + 4 * rax]);
 	lea(ecx, ptr[rax + 8 * rdx]);
@@ -820,10 +769,7 @@ void ChipEmitter::emitFX65(uint8_t x)
 	Xbyak::Label end;
 
 	for (int i = 0; i <= x; i++)
-	{
 		MOV(V_REG(i), RAM_PTR(i));
-		modifiedVRegs[i] = true;
-	}
 
 	if (quirks.memoryIncrement)
 	{
@@ -838,7 +784,6 @@ void ChipEmitter::emitFX0A(uint8_t x, uint16_t pc)
 {
 	Xbyak::Label firstCall, end;
 	const auto val { allocatedVRegs[x] };
-	modifiedVRegs[x] = true;
 
 	mov(PC_32, pc - 2);
 	cmp(byte[BASE + offsetof(ChipState, firstFX0ACall)], 1);

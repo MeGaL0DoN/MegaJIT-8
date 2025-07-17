@@ -262,7 +262,7 @@ private:
 				if (branch)
 					return;
 
-				c.VRegUsage[0xF] -= flagOps;
+				c.VRegWeight[0xF] -= flagOps;
 
 				while (flagOps > 0)
 				{
@@ -292,9 +292,6 @@ private:
 				switch (nnn)
 				{
 				case 0x00EE:
-					if (branch && inSubroutine)
-						c.blockHasInstrSkips = true;
-
 					handleFlow();
 					break;
 				}
@@ -315,10 +312,8 @@ private:
 				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
 				{
 					if (branch)
-					{
 						calculateAllFlags();
-						c.blockHasInstrSkips = true;
-					}
+
 					analyzeBlock(nnn, true);
 				}
 				else
@@ -327,43 +322,67 @@ private:
 
 			case 0x3000:
 			case 0x4000:
-			case 0x5000:
 			case 0xE000:
-				c.VRegUsage[x]++;
+				c.VRegWeight[x]++;
+
+				if (!c.modifiedVRegs[x])
+					c.initialValUseVRegs[x] = true;
 
 				if (x == 0xF)
 					setFlagOpCalcVal(true);
-
-				if (!isFlow(pc))
-					c.blockHasInstrSkips = true;
 
 				branch = true;
 				continue;
 			case 0x6000:
 			case 0xC000:
-				c.VRegUsage[x]++;
+				c.VRegWeight[x]++;
+				c.modifiedVRegs[x] = true;
 
 				if (x == 0xF)
 					setFlagOpCalcVal(false);
 				break;
 			case 0x7000:
-				c.VRegUsage[x]++;
+				if (nn == 0)
+					break;
+
+				c.VRegWeight[x]++;
+
+				if (!c.modifiedVRegs[x])
+					c.initialValUseVRegs[x] = true;
+
+				c.modifiedVRegs[x] = true;
 				break;
 			case 0x8000:
 				switch (n)
 				{
 				case 0x0:
-					c.VRegUsage[x]++;
-					c.VRegUsage[y]++;
+					if (x == y)
+						break;
 
-					if ((x == 0xF) ^ (y == 0xF))
-						setFlagOpCalcVal(y == 0xF);
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;
+
+					if (!c.modifiedVRegs[y])
+						c.initialValUseVRegs[y] = true;
+
+					c.modifiedVRegs[x] = true;
+
+					if (y == 0xF)
+						setFlagOpCalcVal(true);
 					break;
 				case 0x1:
 				case 0x2:
 				case 0x3:
-					c.VRegUsage[x]++;
-					c.VRegUsage[y]++;
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;
+
+					if (!c.modifiedVRegs[x])
+						c.initialValUseVRegs[x] = true;
+
+					if (!c.modifiedVRegs[y])
+						c.initialValUseVRegs[y] = true;
+
+					c.modifiedVRegs[x] = true;
 
 					if (y == 0xF && x != 0xF)
 						setFlagOpCalcVal(true);
@@ -372,43 +391,67 @@ private:
 
 					if (s.quirks.vfReset)
 					{
-						c.VRegUsage[0xF]++;
+						c.VRegWeight[0xF]++;
+						c.modifiedVRegs[0xF] = true;
 						flagOps++;
 					}
 					break;
 				case 0x4:
 				case 0x5:
 				case 0x7:
-					c.VRegUsage[x]++;
-					c.VRegUsage[y]++;
-					c.VRegUsage[0xF]++;
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;
+					c.VRegWeight[0xF]++;
+
+					if (!c.modifiedVRegs[x])
+						c.initialValUseVRegs[x] = true;
+
+					if (!c.modifiedVRegs[y])
+						c.initialValUseVRegs[y] = true;
+
+					c.modifiedVRegs[x] = true;
+					c.modifiedVRegs[0xF] = true;
 					setFlagOpCalcVal(y == 0xF && x != 0xF);
 					flagOps++;
 					break;
 				case 0x0006:
 				case 0x000E:
-					c.VRegUsage[x]++;
-					c.VRegUsage[0xF]++;
+					c.VRegWeight[x]++;
+					c.VRegWeight[0xF]++;
 
 					if (!s.quirks.shifting && x != y)
 					{
-						c.VRegUsage[x]++;
-						c.VRegUsage[y]++;
+						if (!c.modifiedVRegs[y])
+							c.initialValUseVRegs[y] = true;
+
+						c.VRegWeight[x]++;
+						c.VRegWeight[y]++;
 						setFlagOpCalcVal(y == 0xF);
 					}
 					else
-						setFlagOpCalcVal(false);
+					{
+						if (!c.modifiedVRegs[x])
+							c.initialValUseVRegs[x] = true;
 
+						setFlagOpCalcVal(false);
+					}
+
+					c.modifiedVRegs[x] = true;
+					c.modifiedVRegs[0xF] = true;
 					flagOps++;
 					break;
 				}
 				break;
+			case 0x5000:
 			case 0x9000:
-				c.VRegUsage[x]++;
-				c.VRegUsage[y]++;
+				c.VRegWeight[x] += 2;
+				c.VRegWeight[y]++;
 
-				if (!isFlow(pc))
-					c.blockHasInstrSkips = true;
+				if (!c.modifiedVRegs[x])
+					c.initialValUseVRegs[x] = true;
+
+				if (!c.modifiedVRegs[y])
+					c.initialValUseVRegs[y] = true;
 
 				if (x == 0xF || y == 0xF)
 					setFlagOpCalcVal(true);
@@ -418,13 +461,28 @@ private:
 			case 0xA000:
 				break;
 			case 0xB000:
-				c.VRegUsage[(s.quirks.jumping ? x : 0)]++;
+			{
+				const auto reg { s.quirks.jumping ? x : 0 };
+				c.VRegWeight[reg]++;
+
+				if (!c.modifiedVRegs[reg])
+					c.initialValUseVRegs[reg] = true;
+
 				handleFlow();
 				break;
+			}
 			case 0xD000:
-				c.VRegUsage[x]++; 
-				c.VRegUsage[y]++; 
-				c.VRegUsage[0xF]++;
+				c.VRegWeight[x]++; 
+				c.VRegWeight[y]++; 
+				c.VRegWeight[0xF]++;
+
+				if (!c.modifiedVRegs[x])
+					c.initialValUseVRegs[x] = true;
+
+				if (!c.modifiedVRegs[y])
+					c.initialValUseVRegs[y] = true;
+
+				c.modifiedVRegs[0xF] = true;
 				setFlagOpCalcVal(x == 0xF || y == 0xF);
 				flagOps++;
 				break;
@@ -432,13 +490,19 @@ private:
 				switch (nn)
 				{
 				case 0x07:
-					c.VRegUsage[x]++;
+					c.VRegWeight[x]++;
+					c.modifiedVRegs[x] = true;
+
 					if (x == 0xF)
 						setFlagOpCalcVal(false);
 					break;
 				case 0x15:
 				case 0x18:
-					c.VRegUsage[x]++;
+					c.VRegWeight[x]++;
+
+					if (!c.modifiedVRegs[x])
+						c.initialValUseVRegs[x] = true;
+
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 					break;
@@ -448,7 +512,10 @@ private:
 				case 0x1E:
 				case 0x29:
 				case 0x33:
-					c.VRegUsage[x]++;
+					c.VRegWeight[x]++;
+
+					if (!c.modifiedVRegs[x])
+						c.initialValUseVRegs[x] = true;
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
@@ -456,16 +523,23 @@ private:
 					break;
 				case 0x55:
 					for (int i = 0; i <= x; i++)
-						c.VRegUsage[i]++;
+					{
+						c.VRegWeight[i]++;
+
+						if (!c.modifiedVRegs[i])
+							c.initialValUseVRegs[i] = true;
+					}
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 
 					break;
-
 				case 0x65:
 					for (int i = 0; i <= x; i++)
-						c.VRegUsage[i]++;
+					{
+						c.VRegWeight[i]++;
+						c.modifiedVRegs[i] = true;
+					}
 
 					if (x == 0xF)
 						setFlagOpCalcVal(false);
@@ -616,7 +690,7 @@ private:
 						{
 							const int32_t skippedInstrs = (c.instructions - p.instrCount) - (c.branchedInstrs - p.branchCount);
 							// jmp opcode is 1 byte (0x9E) + 4 bytes jump displacement
-							c.patchAddImm32(p.codePtr - sizeof(int32_t) - 1, -skippedInstrs); 
+							c.patchImm32(p.codePtr - sizeof(int32_t) - 1, -skippedInstrs); 
 						}
 					}
 				}
