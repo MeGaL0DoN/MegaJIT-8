@@ -12,8 +12,10 @@ public:
 	static void initAudio();
 	static void setVolume(double val);
 
-	ChipCore(ChipState& s) : s(s)
+	explicit ChipCore(ChipState& s) : s(s)
 	{}
+
+	virtual ~ChipCore() = default;
 
 	virtual uint64_t execute() = 0;
 
@@ -37,10 +39,10 @@ public:
 		return false;
 	}
 
-	const std::array<uint64_t, ChipState::SCR_HEIGHT>& getScreenBuffer() { return s.screenBuffer; }
-	inline bool awaitingKeyPress() { return s.inputReg != -1; }
+	const std::array<uint64_t, ChipState::SCR_HEIGHT>& getScreenBuffer() const { return s.screenBuffer; }
+	bool awaitingKeyPress() const { return s.inputReg != -1; }
 
-	inline void setKey(uint8_t key, bool isPressed)
+	inline void setKey(uint8_t key, bool isPressed) const
 	{
 		s.keys[key & 0xF] = isPressed;
 		if (awaitingKeyPress() && !isPressed)
@@ -50,9 +52,9 @@ public:
 		}
 	}
 
-	inline void resetKeys() { std::memset(s.keys.data(), 0, sizeof(s.keys)); }
+	inline void resetKeys() const { std::memset(s.keys.data(), 0, sizeof(s.keys)); }
 
-	inline void updateTimers()
+	inline void updateTimers() const
 	{
 		if (s.delayTimer > 0) s.delayTimer--;
 		if (s.soundTimer > 0) s.soundTimer--;

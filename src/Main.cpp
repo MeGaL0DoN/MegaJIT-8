@@ -8,7 +8,6 @@
 
 #include <array>
 #include <map>
-#include <string_view>
 #include <sstream>
 #include <iostream>   
 #include <filesystem>
@@ -31,9 +30,9 @@ enum class CoreType
 };
 
 std::thread coreThread;
-bool coreThreadRunning { false };
-std::atomic<bool> executeCore { false };
-std::atomic<bool> stoppedExecuting { false };
+std::atomic coreThreadRunning { false };
+std::atomic executeCore { false };
+std::atomic stoppedExecuting { false };
 
 ChipState s{};
 
@@ -146,7 +145,7 @@ void emitCode()
     emitCPUNameGetter();
     code.getCode<void(*)()>()();
 
-    const auto nul { std::find(cpuBrandStr.begin(), cpuBrandStr.end(), '\0') };
+    const auto nul { std::ranges::find(cpuBrandStr, '\0') };
     cpuBrandStr.erase(nul, cpuBrandStr.end());
     const auto pos { cpuBrandStr.find_last_not_of(' ') };
 
@@ -187,15 +186,15 @@ void setBuffers()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
     glGenTextures(1, &chipTexture);
     glBindTexture(GL_TEXTURE_2D, chipTexture);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
     glGenerateMipmap(GL_TEXTURE_2D);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -366,9 +365,7 @@ void loadROM(const std::filesystem::path& path)
 
     threadSafeExec([&]
     {
-        auto st { std::ifstream { path, std::ios::binary } };
-
-        if (chipCore->loadROM(st))
+        if (auto st { std::ifstream { path, std::ios::binary } }; chipCore->loadROM(st))
         {
             currentRomPath = path;
             clearCoreCache();
@@ -393,9 +390,8 @@ void renderImGUI()
             {
                 fileDialogOpen = true;
                 NFD::UniquePathN outPath;
-                const nfdresult_t result { NFD::OpenDialog(outPath, ROMfilterItem, 1, defaultPath.c_str()) };
 
-                if (result == NFD_OKAY)
+                if (const nfdresult_t result { NFD::OpenDialog(outPath, ROMfilterItem, 1, defaultPath.c_str()) }; result == NFD_OKAY)
                     loadROM(outPath.get());
 
                 fileDialogOpen = false;
@@ -434,8 +430,8 @@ void renderImGUI()
             ImGui::Separator();
             ImGui::Spacing();
 
-            static ImVec4 foregroundColor { ImVec4(1.0f, 1.0f, 1.0f, 1.0f) };
-            static ImVec4 backgroundColor { ImVec4(0.0f, 0.0f, 0.0f, 1.0f) };
+            static auto foregroundColor { ImVec4(1.0f, 1.0f, 1.0f, 1.0f) };
+            static auto backgroundColor { ImVec4(0.0f, 0.0f, 0.0f, 1.0f) };
 
             if (!enableRainbow)
             {
@@ -450,8 +446,8 @@ void renderImGUI()
 
                 if (showForegroundPicker)
                 {
-                    if (ImGui::ColorPicker3("Pick a Color", (float*)&foregroundColor))
-                        pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
+                    if (ImGui::ColorPicker3("Pick a Color", reinterpret_cast<float*>(&foregroundColor)))
+                        pixelShader.setFloat4("foregroundCol", reinterpret_cast<float*>(&foregroundColor));
                 }
             }
 
@@ -466,8 +462,8 @@ void renderImGUI()
 
             if (showBackgroundPicker)
             {
-                if (ImGui::ColorPicker3("Pick a Color", (float*)&backgroundColor))
-                    pixelShader.setFloat4("backgroundCol", (float*)&backgroundColor);
+                if (ImGui::ColorPicker3("Pick a Color", reinterpret_cast<float*>(&backgroundColor)))
+                    pixelShader.setFloat4("backgroundCol", reinterpret_cast<float*>(&backgroundColor));
             }
 
             ImGui::SeparatorText("Misc.");
@@ -476,8 +472,8 @@ void renderImGUI()
                 foregroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
                 backgroundColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
 
-                pixelShader.setFloat4("foregroundCol", (float*)&foregroundColor);
-                pixelShader.setFloat4("backgroundCol", (float*)&backgroundColor);
+                pixelShader.setFloat4("foregroundCol", reinterpret_cast<float*>(&foregroundColor));
+                pixelShader.setFloat4("backgroundCol", reinterpret_cast<float*>(&backgroundColor));
 
                 showForegroundPicker = false;
                 showBackgroundPicker = false;
@@ -511,9 +507,8 @@ void renderImGUI()
                 {
                     fileDialogOpen = true;
                     NFD::UniquePathN outPath;
-                    const nfdresult_t result { NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) };
 
-                    if (result == NFD_OKAY)
+                    if (const nfdresult_t result { NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) }; result == NFD_OKAY)
                     {
                         threadSafeExec([&]
                         {
@@ -611,11 +606,11 @@ void renderImGUI()
 
         if (ImGui::BeginMenu("Quirks"))
         {
-            if (ImGui::Checkbox("VFReset", &s.quirks.vfReset)) clearCoreCache();
+            if (ImGui::Checkbox("VF Reset", &s.quirks.vfReset)) clearCoreCache();
+            if (ImGui::Checkbox("Memory", &s.quirks.memoryIncrement)) clearCoreCache();
+            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCache();
             if (ImGui::Checkbox("Shifting", &s.quirks.shifting)) clearCoreCache();
             if (ImGui::Checkbox("Jumping", &s.quirks.jumping)) clearCoreCache();
-            if (ImGui::Checkbox("Clipping", &s.quirks.clipping)) clearCoreCache();
-            if (ImGui::Checkbox("Memory Increment", &s.quirks.memoryIncrement)) clearCoreCache();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -653,7 +648,7 @@ void render()
 {
     glClear(GL_COLOR_BUFFER_BIT);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ChipState::SCR_WIDTH, ChipState::SCR_HEIGHT, GL_RED, GL_UNSIGNED_BYTE, textureBuf.data());
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
     renderImGUI();
     glfwSwapBuffers(window);
 }
@@ -696,9 +691,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
      if (!paused)
      {
-         const auto keyInd { keyConfig.find(key) };
-
-         if (keyInd != keyConfig.end())
+         if (const auto keyInd { keyConfig.find(key) }; keyInd != keyConfig.end())
          {
              threadSafeExec([&]
              {
@@ -730,13 +723,13 @@ void window_refresh_callback(GLFWwindow* _window)
 
 inline std::wstring ToUTF16(const std::string& utf8Str)
 {
-    const auto size = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), utf8Str.length(), nullptr, 0);
+    const auto size { MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), nullptr, 0) };
 
     if (size <= 0)
         return L"";
 
     std::wstring result(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), utf8Str.length(), result.data(), size);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), result.data(), size);
     return result;
 }
 
@@ -751,7 +744,7 @@ inline std::filesystem::path getExecutablePath()
 {
 #ifdef _WIN32
     wchar_t pathBuf[MAX_PATH];
-    GetModuleFileNameW(NULL, pathBuf, MAX_PATH);
+    GetModuleFileNameW(nullptr, pathBuf, MAX_PATH);
 #else
     char pathBuf[4096];
 #ifdef __APPLE__
@@ -792,7 +785,7 @@ void setWindowSize()
     ImGui::Render();
 
     const GLFWvidmode* mode { glfwGetVideoMode(glfwGetPrimaryMonitor()) };
-    const int scale { static_cast<int>(mode->width * 0.5f) / ChipState::SCR_WIDTH };
+    const int scale { static_cast<int>(static_cast<float>(mode->width) * 0.5f) / ChipState::SCR_WIDTH };
     viewportWidth = scale * ChipState::SCR_WIDTH;
     viewportHeight = scale * ChipState::SCR_HEIGHT;
 
@@ -808,7 +801,7 @@ bool setGLFW()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    window = glfwCreateWindow(1, 1, APP_NAME, NULL, NULL);
+    window = glfwCreateWindow(1, 1, APP_NAME, nullptr, nullptr);
     if (!window)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -825,7 +818,7 @@ bool setGLFW()
     glfwSetKeyCallback(window, key_callback);
     glfwSetDropCallback(window, drop_callback);
 
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)))
     {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return false;
@@ -842,9 +835,9 @@ void setImGUI()
     io.IniFilename = nullptr;
 
     const int resolutionX { glfwGetVideoMode(glfwGetPrimaryMonitor())->width };
-    const float scaleFactor { resolutionX / 1920.0f };
+    const float scaleFactor { static_cast<float>(resolutionX) / 1920.0f };
 
-    io.Fonts->AddFontFromMemoryCompressedTTF((void*)Resources::ROBOTO_MONO_FONT, sizeof(Resources::ROBOTO_MONO_FONT), scaleFactor * 17);
+    io.Fonts->AddFontFromMemoryCompressedTTF(Resources::ROBOTO_MONO_FONT, sizeof(Resources::ROBOTO_MONO_FONT), scaleFactor * 17);
     ImGui::GetStyle().ScaleAllSizes(scaleFactor);
 
     ImGui::StyleColorsDark();
@@ -896,7 +889,7 @@ int main()
                             continue;
 
                         for (int i = 0; i < IPF;)
-                            i += chipCore->execute();
+                            i += static_cast<int>(chipCore->execute());
                     }
                 }
 
@@ -914,12 +907,12 @@ int main()
                 {
                     setStats = true;
                     threadSafeExec([&]() {});
-                    executedInstructions /= secondsTimer;
+                    executedInstructions = static_cast<uint64_t>(static_cast<double>(executedInstructions) / secondsTimer);
                 }
                 else
                     executedInstructions = 0;
 
-                const double mips { executedInstructions / 1e6 };
+                const double mips { static_cast<double>(executedInstructions) / 1e6 };
                 const double mipf { mips / 60 };
                 oss << std::fixed << std::setprecision(3) << APP_NAME << " (" << mips << " MIPS) | " << cpuBrandStr;
 

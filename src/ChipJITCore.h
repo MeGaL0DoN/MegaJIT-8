@@ -1,3 +1,5 @@
+#pragma once
+
 #include <fstream>
 #include <random>
 #include <array>
@@ -6,6 +8,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <queue>
+#include <bitset>
 
 #include <Zydis/Zydis.h>
 
@@ -40,10 +43,26 @@ public:
 		clearJITCache();
 	}
 
-	void dumpCode(const std::filesystem::path& path)
+	void dumpCode(const std::filesystem::path& path) const
 	{
-		std::ofstream outFile{ path, std::ios::out };
+		std::ofstream outFile { path, std::ios::out };
 		if (!outFile) return;
+
+		static ZydisDecoder decoder;
+		static ZydisFormatter formatter;
+		static bool decoderInitialized { false }, formatterInitialized { false };
+
+		if (!decoderInitialized)
+		{
+			ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+			decoderInitialized = true;
+		}
+		if (!formatterInitialized)
+		{
+			ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+			ZydisFormatterSetProperty(&formatter, ZYDIS_FORMATTER_PROP_ADDR_PADDING_ABSOLUTE, ZYDIS_PADDING_DISABLED);
+			formatterInitialized = true;
+		}
 
 		bool firstBlock { true };
 		ZyanU64 runtimeAddress { 0 };
@@ -63,14 +82,18 @@ public:
 			outFile << "Block at PC: " << std::hex << "0x" << block.pc << "-0x" << block.pcRanges.back().second
 					<< "\n-----------------------------------------";
 
-			ZydisDisassembledInstruction instruction;
-			ZyanUSize offset = 0;
+			ZyanUSize offset { 0 };
+			ZydisDecodedInstruction instruction;
+			ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+			char textBuffer[256];
 
-			while (ZYAN_SUCCESS(ZydisDisassembleIntel(ZYDIS_MACHINE_MODE_LONG_64, runtimeAddress, buf + offset, block.cacheSize - offset, &instruction))) 
+			while (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf + offset, block.cacheSize - offset, &instruction, operands)))
 			{
-				outFile << "\n0x" << std::hex << std::setw(8) << std::setfill('0') << runtimeAddress << " | " << instruction.text;
-				offset += instruction.info.length;
-				runtimeAddress += instruction.info.length;
+				ZydisFormatterFormatInstruction(&formatter, &instruction, operands, instruction.operand_count_visible, textBuffer, sizeof(textBuffer), runtimeAddress, nullptr);
+				outFile << "\n0x" << std::hex << std::setw(8) << std::setfill('0') << runtimeAddress << " | " << textBuffer;
+
+				offset += instruction.length;
+				runtimeAddress += instruction.length;
 			}
 		}
 	}
@@ -79,19 +102,43 @@ private:
 	ChipJITState JIT{};
 	ChipEmitter c;
 
-	JITBlock* block { nullptr };
-	std::queue<bool> blockFlagCalcList{};
-	uint16_t flagOps { 0 };
-
-	static constexpr size_t BLOCK_MAX_INSTR { 255 };
-	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
-
-	struct retPoint
+	struct RetPoint
 	{
 		uint8_t* codePtr;
 		uint16_t instrCount;
 		uint16_t branchCount;
 	};
+	struct SubroutineInfo
+	{
+		bool conditional { false };
+		bool requiresRuntimeStack { false };
+		uint16_t startInstrCount { 0 };
+		uint16_t startBranchCount { 0 };
+		std::vector<RetPoint> condRetPoints{};
+	};
+	struct RegAllocFrameInfo
+	{
+		std::array<uint16_t, 16> regWeights{};
+		std::bitset<16> modifiedRegs{};
+		std::bitset<16> initialValUseRegs{};
+		std::vector<RegAllocFrameInfo> childFrames{};
+		bool conditionalFrame;
+
+		std::array<RegAllocation, 16> allocation{};
+
+		explicit RegAllocFrameInfo(bool cond) : conditionalFrame(cond)
+		{}
+	};
+
+	JITBlock* block { nullptr };
+
+	std::queue<bool> blockFlagCalcList{};
+	uint16_t flagOps { 0 };
+
+	std::vector<RegAllocFrameInfo> allocFrames{};
+
+	static constexpr size_t BLOCK_MAX_INSTR { 256 };
+	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
 
 	void initialize() override
 	{
@@ -101,7 +148,7 @@ private:
 
 	uint8_t* compileBlock(uint16_t pc)
 	{
-		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.8) };
+		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.5) };
 
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
@@ -118,39 +165,60 @@ private:
 		}
 
 		if (block == nullptr)
-		{
-			JIT.blocks.emplace_back(pc);
-			block = &JIT.blocks.back();
-		}
+			block = &JIT.blocks.emplace_back(pc);
 
 		blockFlagCalcList = {};
+		allocFrames.clear();
 
 		const auto func { c.getCodeEndPtr() };
 		JIT.blockMap[pc] = func;
 
-		c.reset();
-		analyzeBlock(pc);
-		c.allocateRegs();
-		c.emitPrologue();
+		c.newBlock();
+		auto& frame { allocFrames.emplace_back(false) };
+		analyzeBlock(pc, &frame, allocFrames);
+		allocateRegisters(allocFrames);
 
 		c.instructions = 0;
-		emitBlock(pc);
+		//c.allocatedRegs = allocFrames.front().allocation;
+		c.emitLoadAllocRegs();
+		emitBlock(pc, allocFrames.data() + 1);
+
 		block->cacheSize = static_cast<uint32_t>(c.getCodeEndPtr() - func);
 		block = nullptr;
 
 		return func;
 	}
 
-	inline bool isInlinableJump(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
+	void allocateRegisters(std::vector<RegAllocFrameInfo>& frames) // TODO
 	{
-		return (nnn < startPC || nnn >= pc) && instrs < instructionsPerBlock;
+		constexpr int ALLOC_THRESHOLD { 2 };
+		std::array<std::pair<uint8_t, uint16_t>, 16> usageMap{};
+
+		for (auto& alloc : frames)
+		{
+			int cnt { 0 };
+
+			for (int i = 0; i < 15; i++) // 16
+			{
+				if (alloc.regWeights[i] >= ALLOC_THRESHOLD)
+					usageMap[cnt++] = { i, alloc.regWeights[i] };
+			}
+
+			std::ranges::fill(alloc.allocation, RegAllocation{ ChipEmitter::NOT_ALLOCATED });
+			std::sort(usageMap.begin(), usageMap.begin() + cnt, [](const auto& a, const auto& b) { return a.second > b.second; });
+
+			for (int i = 0; i < cnt && i < ChipEmitter::MAX_ALLOC_REGS; i++)
+			{
+				const auto reg { usageMap[i].first };
+				alloc.allocation[reg] = RegAllocation{ static_cast<uint8_t>(i), alloc.initialValUseRegs[reg], alloc.modifiedRegs[reg] };
+			}
+
+			allocateRegisters(alloc.childFrames);
+		}
 	}
 
-	inline bool isInlinableSubroutine(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
+	inline bool subRequiresRuntimeStack(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
 	{
-		if (!(nnn < startPC || nnn >= pc))
-			return false;
-
 		bool branch { false };
 		const uint16_t startNNN { nnn };
 		
@@ -169,20 +237,20 @@ private:
 				case 0x00EE:
 					if (branch)
 					 	break;
-					return true;
+					return false;
 				default:
 					break;
 				}
 				break;
 			case 0x1000:
 				if (!branch)
-					return isInlinableSubroutine(startNNN, nnn, opcode & 0xFFF, instrs);
-				if (!isInlinableSubroutine(startNNN, nnn, opcode & 0xFFF, instrs))
-					return false;
+					return subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs);
+				if (subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs))
+					return true;
 				break;
 			case 0x2000:
-				if (!isInlinableSubroutine(startNNN, nnn, opcode & 0xFFF, instrs))
-					return false;
+				if (subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs))
+					return true;
 				break;
 			case 0x3000:
 			case 0x4000:
@@ -192,14 +260,14 @@ private:
 				branch = true;
 				continue;
 			case 0xB000:
-				return false;
+				return true;
 			case 0xF000:
 				switch (opcode & 0xFF)
 				{
 					case 0x000A:
 					case 0x0033:
 					case 0x0055:
-						return false;
+						return true;
 					default:
 						break;
 				}
@@ -211,7 +279,7 @@ private:
 			branch = false;
 		}
 
-		return false;
+		return true;
 	}
 
 	inline bool isFlow(uint16_t pc) const
@@ -232,8 +300,12 @@ private:
 				return false;
 		}
 	}
+	inline bool isInlinableFlow(uint16_t startPC, uint16_t pc, uint16_t nnn) const
+	{
+		return (nnn < startPC || nnn >= pc) && c.instructions < instructionsPerBlock;
+	}
 
-	inline uint16_t analyzeBlock(uint16_t pc, bool inSubroutine = false)
+	uint16_t analyzeBlock(uint16_t pc, RegAllocFrameInfo* alloc, std::vector<RegAllocFrameInfo>& allocFrames)
 	{
 		const uint16_t startPC { pc };
 		bool branch { false }, flow { false };
@@ -245,16 +317,7 @@ private:
 				blockFlagCalcList.push(true);
 				flagOps--;
 			}
-		};
-
-		const auto handleFlow = [&]
-		{
-			if (branch)
-				calculateAllFlags();
-			else
-				flow = true;
-		};
-		 
+		};		 
 		const auto setFlagOpCalcVal = [&](bool val)
 		{
 			if (!val)
@@ -262,7 +325,7 @@ private:
 				if (branch)
 					return;
 
-				c.VRegWeight[0xF] -= flagOps;
+				alloc->regWeights[0xF] -= flagOps;
 
 				while (flagOps > 0)
 				{
@@ -272,6 +335,24 @@ private:
 			}
 			else
 				calculateAllFlags();
+		};
+
+		const auto handleFlow = [&]
+		{
+			if (branch)
+				calculateAllFlags();
+			else
+				flow = true;
+		};
+
+		const auto setInitialValUseReg = [&](uint8_t r)
+		{
+			if (!alloc->modifiedRegs[r])
+				alloc->initialValUseRegs[r] = true;
+		};
+		const auto newRegAllocFrame = [&]()
+		{
+			alloc = &allocFrames.emplace_back(false);
 		};
 
 		while ((c.instructions < instructionsPerBlock || branch) && pc < 0xFFF)
@@ -289,32 +370,38 @@ private:
 			switch (opcode & 0xF000)
 			{
 			case 0x0000:
-				switch (nnn)
-				{
-				case 0x00EE:
+				if (nnn == 0x0EE)
 					handleFlow();
-					break;
-				}
 				break;
 			case 0x1000:
-				if (isInlinableJump(startPC, pc, nnn, c.instructions))
+				if (isInlinableFlow(startPC, pc, nnn))
 				{
 					if (!branch)
-						return analyzeBlock(nnn);
+					{
+						auto& frame { allocFrames.emplace_back(false) };
+						return analyzeBlock(nnn, &frame, allocFrames);
+					}
 
 					calculateAllFlags();
-					analyzeBlock(nnn);
+					auto& frame { allocFrames.emplace_back(true) };
+					analyzeBlock(nnn, &frame, allocFrames);
 				}
 				else
 					handleFlow();
 				break;
 			case 0x2000:
-				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
+				if (isInlinableFlow(startPC, pc, nnn))
 				{
 					if (branch)
+					{
 						calculateAllFlags();
+						allocFrames.emplace_back(true);
+					}
+					else
+						allocFrames.emplace_back(false);
 
-					analyzeBlock(nnn, true);
+					analyzeBlock(nnn, &allocFrames.back(), allocFrames.back().childFrames);
+					newRegAllocFrame();
 				}
 				else
 					handleFlow();
@@ -323,10 +410,8 @@ private:
 			case 0x3000:
 			case 0x4000:
 			case 0xE000:
-				c.VRegWeight[x]++;
-
-				if (!c.modifiedVRegs[x])
-					c.initialValUseVRegs[x] = true;
+				alloc->regWeights[x]++;
+				setInitialValUseReg(x);
 
 				if (x == 0xF)
 					setFlagOpCalcVal(true);
@@ -335,8 +420,8 @@ private:
 				continue;
 			case 0x6000:
 			case 0xC000:
-				c.VRegWeight[x]++;
-				c.modifiedVRegs[x] = true;
+				alloc->regWeights[x]++;
+				alloc->modifiedRegs[x] = true;
 
 				if (x == 0xF)
 					setFlagOpCalcVal(false);
@@ -345,12 +430,9 @@ private:
 				if (nn == 0)
 					break;
 
-				c.VRegWeight[x]++;
-
-				if (!c.modifiedVRegs[x])
-					c.initialValUseVRegs[x] = true;
-
-				c.modifiedVRegs[x] = true;
+				alloc->regWeights[x]++;
+				setInitialValUseReg(x);
+				alloc->modifiedRegs[x] = true;
 				break;
 			case 0x8000:
 				switch (n)
@@ -359,13 +441,10 @@ private:
 					if (x == y)
 						break;
 
-					c.VRegWeight[x] += 2;
-					c.VRegWeight[y]++;
-
-					if (!c.modifiedVRegs[y])
-						c.initialValUseVRegs[y] = true;
-
-					c.modifiedVRegs[x] = true;
+					alloc->regWeights[x] += 2;
+					alloc->regWeights[y]++;
+					setInitialValUseReg(y);
+					alloc->modifiedRegs[x] = true;
 
 					if (y == 0xF)
 						setFlagOpCalcVal(true);
@@ -373,16 +452,11 @@ private:
 				case 0x1:
 				case 0x2:
 				case 0x3:
-					c.VRegWeight[x] += 2;
-					c.VRegWeight[y]++;
-
-					if (!c.modifiedVRegs[x])
-						c.initialValUseVRegs[x] = true;
-
-					if (!c.modifiedVRegs[y])
-						c.initialValUseVRegs[y] = true;
-
-					c.modifiedVRegs[x] = true;
+					alloc->regWeights[x] += 2;
+					alloc->regWeights[y]++;;
+					setInitialValUseReg(x);
+					setInitialValUseReg(y);
+					alloc->modifiedRegs[x] = true;
 
 					if (y == 0xF && x != 0xF)
 						setFlagOpCalcVal(true);
@@ -391,67 +465,55 @@ private:
 
 					if (s.quirks.vfReset)
 					{
-						c.VRegWeight[0xF]++;
-						c.modifiedVRegs[0xF] = true;
+						alloc->regWeights[0xF]++;
+						alloc->modifiedRegs[0xF] = true;
 						flagOps++;
 					}
 					break;
 				case 0x4:
 				case 0x5:
 				case 0x7:
-					c.VRegWeight[x] += 2;
-					c.VRegWeight[y]++;
-					c.VRegWeight[0xF]++;
+					alloc->regWeights[x] += 2;
+					alloc->regWeights[y]++;
+					alloc->regWeights[0xF]++;
+					setInitialValUseReg(x);
+					setInitialValUseReg(y);
+					alloc->modifiedRegs[x] = true;
+					alloc->modifiedRegs[0xF] = true;
 
-					if (!c.modifiedVRegs[x])
-						c.initialValUseVRegs[x] = true;
-
-					if (!c.modifiedVRegs[y])
-						c.initialValUseVRegs[y] = true;
-
-					c.modifiedVRegs[x] = true;
-					c.modifiedVRegs[0xF] = true;
 					setFlagOpCalcVal(y == 0xF && x != 0xF);
 					flagOps++;
 					break;
 				case 0x0006:
 				case 0x000E:
-					c.VRegWeight[x]++;
-					c.VRegWeight[0xF]++;
+					alloc->regWeights[x]++;
+					alloc->regWeights[0xF]++;
 
 					if (!s.quirks.shifting && x != y)
 					{
-						if (!c.modifiedVRegs[y])
-							c.initialValUseVRegs[y] = true;
-
-						c.VRegWeight[x]++;
-						c.VRegWeight[y]++;
+						setInitialValUseReg(y);
+						alloc->regWeights[x]++;
+						alloc->regWeights[y]++;
 						setFlagOpCalcVal(y == 0xF);
 					}
 					else
 					{
-						if (!c.modifiedVRegs[x])
-							c.initialValUseVRegs[x] = true;
-
+						setInitialValUseReg(x);
 						setFlagOpCalcVal(false);
 					}
 
-					c.modifiedVRegs[x] = true;
-					c.modifiedVRegs[0xF] = true;
+					alloc->modifiedRegs[x] = true;
+					alloc->modifiedRegs[0xF] = true;
 					flagOps++;
 					break;
 				}
 				break;
 			case 0x5000:
 			case 0x9000:
-				c.VRegWeight[x] += 2;
-				c.VRegWeight[y]++;
-
-				if (!c.modifiedVRegs[x])
-					c.initialValUseVRegs[x] = true;
-
-				if (!c.modifiedVRegs[y])
-					c.initialValUseVRegs[y] = true;
+				alloc->regWeights[x] += 2;
+				alloc->regWeights[y]++;
+				setInitialValUseReg(x);
+				setInitialValUseReg(y);
 
 				if (x == 0xF || y == 0xF)
 					setFlagOpCalcVal(true);
@@ -463,26 +525,19 @@ private:
 			case 0xB000:
 			{
 				const auto reg { s.quirks.jumping ? x : 0 };
-				c.VRegWeight[reg]++;
-
-				if (!c.modifiedVRegs[reg])
-					c.initialValUseVRegs[reg] = true;
-
+				alloc->regWeights[reg]++;
+				setInitialValUseReg(reg);
 				handleFlow();
 				break;
 			}
 			case 0xD000:
-				c.VRegWeight[x]++; 
-				c.VRegWeight[y]++; 
-				c.VRegWeight[0xF]++;
+				alloc->regWeights[x]++;
+				alloc->regWeights[y]++;
+				alloc->regWeights[0xF]++;
+				setInitialValUseReg(x);
+				setInitialValUseReg(y);
+				alloc->modifiedRegs[0xF] = true;
 
-				if (!c.modifiedVRegs[x])
-					c.initialValUseVRegs[x] = true;
-
-				if (!c.modifiedVRegs[y])
-					c.initialValUseVRegs[y] = true;
-
-				c.modifiedVRegs[0xF] = true;
 				setFlagOpCalcVal(x == 0xF || y == 0xF);
 				flagOps++;
 				break;
@@ -490,18 +545,16 @@ private:
 				switch (nn)
 				{
 				case 0x07:
-					c.VRegWeight[x]++;
-					c.modifiedVRegs[x] = true;
+					alloc->regWeights[x]++;
+					alloc->modifiedRegs[x] = true;
 
 					if (x == 0xF)
 						setFlagOpCalcVal(false);
 					break;
 				case 0x15:
 				case 0x18:
-					c.VRegWeight[x]++;
-
-					if (!c.modifiedVRegs[x])
-						c.initialValUseVRegs[x] = true;
+					alloc->regWeights[x]++;
+					setInitialValUseReg(x);
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
@@ -511,34 +564,40 @@ private:
 					break;
 				case 0x1E:
 				case 0x29:
-				case 0x33:
-					c.VRegWeight[x]++;
-
-					if (!c.modifiedVRegs[x])
-						c.initialValUseVRegs[x] = true;
+					alloc->regWeights[x]++;
+					setInitialValUseReg(x);
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 
 					break;
+				case 0x33:
+					alloc->regWeights[x]++;
+					setInitialValUseReg(x);
+
+					if (x == 0xF)
+						setFlagOpCalcVal(true);
+
+					// new reg allocation on mem stores
+					newRegAllocFrame();
+					break;
 				case 0x55:
 					for (int i = 0; i <= x; i++)
 					{
-						c.VRegWeight[i]++;
-
-						if (!c.modifiedVRegs[i])
-							c.initialValUseVRegs[i] = true;
+						alloc->regWeights[i]++;
+						setInitialValUseReg(i);
 					}
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 
+					newRegAllocFrame();
 					break;
 				case 0x65:
 					for (int i = 0; i <= x; i++)
 					{
-						c.VRegWeight[i]++;
-						c.modifiedVRegs[i] = true;
+						alloc->regWeights[i]++;
+						alloc->modifiedRegs[i] = true;
 					}
 
 					if (x == 0xF)
@@ -559,19 +618,65 @@ private:
 		return pc;
 	}
 
-	inline uint16_t emitBlock(uint16_t pc, bool insideBranch = false, std::vector<retPoint>* inlinedSubCondRetPoints = nullptr)
+	// BROKEN REG ALLOCATION BETWEEN BLOCKS!
+	
+	//: main
+	//	loop
+	//	v0 : = 0
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 += 5
+	//	v0 : = 0
+	//	if v0 == 0 then
+	//		test
+	//		v0 += 3
+	//		again
+
+	//		: test
+	//		v1 += 7
+	//		v1 += 7
+	//		return
+
+
+	// 	: main
+	// loop
+	//  v0 := 0
+	//  if v0 == 0 then
+	//   test
+	//  v0 += 3
+	// again
+	//
+	// : test
+	// if v1 == 0 begin
+	// 	v1 += 2
+	// 	v1 -= 5
+	// 	v1 -= 7
+	// end
+	// if v1 == 1 then
+	// 	return
+	// if v1 == 2 begin
+	// 	vf += 200
+	// 	vf += 200
+	// 	vf += 200
+	// 	vf += 200
+	// 	vf += 200
+	// 	vf += 200
+	// 	return
+	// end
+	// return
+
+	uint16_t emitBlock(uint16_t pc, RegAllocFrameInfo* alloc, SubroutineInfo* sub = nullptr, bool conditionalBlock = false)
 	{
 		const uint16_t startPC { pc };
-		const uint16_t startInstrCount { c.instructions };
-		const uint16_t startBranchCount { c.branchedInstrs };
 		bool flow { false };
-		uint8_t* branchEndPtr { nullptr };
-
-#define BRANCH() \
-		newBranchEndPtr = c.getCodeEndPtr(); \
-		if (!isFlow(pc))\
-			c.branchedInstrs++; \
-		break \
+		uint8_t* branchEndPtr { nullptr }, *newBranchEndPtr { nullptr };
 
 		const auto popFlagCalc = [&]() -> bool
 		{
@@ -586,15 +691,32 @@ private:
 			if (std::ranges::find(block->pcRanges, range) == block->pcRanges.end())
 				block->pcRanges.push_back(range);
 		};
+		const auto newRegAllocFrame = [&]()
+		{
+			c.emitStoreAllocRegs();
+			alloc++;
+			//c.allocatedRegs = alloc++->allocation;
+			c.emitLoadAllocRegs();
+		};
+		const auto branch = [&](auto emitFunc)
+		{
+			if (isFlow(pc))
+				emitFunc(false);
+			else
+			{
+				emitFunc(true);
+				c.branchedInstrs++;
+			}
+
+			newBranchEndPtr = c.getCodeEndPtr();
+		};
  
 		while ((c.instructions < instructionsPerBlock || branchEndPtr) && pc < 0xFFF)
 		{
-			const uint16_t prevInstrCount { c.instructions };
-			const uint16_t prevBranchCount { c.branchedInstrs };
+			const uint16_t prevInstrCount { c.instructions }, prevBranchCount { c.branchedInstrs };
 			c.instructions++;
 
 			bool inlinedBlock { false };
-			uint8_t* newBranchEndPtr { nullptr };
 
 			const uint16_t opcode = (s.RAM[pc] << 8) | s.RAM[pc + 1];
 			pc += 2;
@@ -608,23 +730,34 @@ private:
 			{
 			case 0x0000:
 			{
-				switch (opcode & 0x0FFF)
+				switch (opcode & 0xFFF)
 				{
-				case 0x00E0:
+				case 0x0E0:
 					c.emit00E0();
 					break;
-				case 0x00EE:
-					if (inlinedSubCondRetPoints)
+				case 0x0EE:
+					if (sub)
 					{
-						if (insideBranch) // + 1 because need to count the call instruction itself.
-							c.emitInstrCountAdd(1 + (c.instructions - startInstrCount) - (c.branchedInstrs - startBranchCount));
+						if (sub->requiresRuntimeStack)
+							c.emit00EE(false);
 
-						if (branchEndPtr)
+						if (sub->conditional)
+							c.emitInstrCountAdd((c.instructions - sub->startInstrCount) - (c.branchedInstrs - sub->startBranchCount));
+
+						if (branchEndPtr || conditionalBlock)
 						{
-							if (!insideBranch)
+							if (!sub->conditional)
 								c.emitInstrCountAddPlaceholder(); // to later subtract the number of remaining instructions in the subroutine.
 
-							inlinedSubCondRetPoints->emplace_back(c.emitJumpPlaceholder(), c.instructions, c.branchedInstrs++);
+							sub->condRetPoints.emplace_back(c.emitJumpPlaceholder(), c.instructions, c.branchedInstrs);
+
+							if (!branchEndPtr)
+							{
+								addPcRange();
+								return pc;
+							}
+
+							c.branchedInstrs++;
 							inlinedBlock = true;
 						}
 						else
@@ -635,7 +768,7 @@ private:
 					}
 					else
 					{
-						c.emit00EE();
+						c.emit00EE(true);
 						flow = true;
 					}
 					break;
@@ -646,11 +779,14 @@ private:
 				break;
 			}
 			case 0x1000:
-				if (isInlinableJump(startPC, pc, nnn, c.instructions))
+				if (isInlinableFlow(startPC, pc, nnn))
 				{
 					if (branchEndPtr)
 					{
-						emitBlock(nnn, true);
+						const auto prevAllocRegs { c.allocatedRegs };
+						newRegAllocFrame();
+						emitBlock(nnn, alloc, sub, true);
+						c.allocatedRegs = prevAllocRegs;
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
@@ -658,7 +794,8 @@ private:
 					else
 					{
 						addPcRange();
-						return emitBlock(nnn);
+						newRegAllocFrame();
+						return emitBlock(nnn, alloc, sub, conditionalBlock);
 					}
 				}
 				else
@@ -668,21 +805,33 @@ private:
 				}
 				break;
 			case 0x2000:
-				if (isInlinableSubroutine(startPC, pc, nnn, c.instructions))
+				if (isInlinableFlow(startPC, pc, nnn))
 				{
-					std::vector<retPoint> condRetPoints{};
+					const auto childFrames { alloc->childFrames.data() };
+					newRegAllocFrame();
+
+					SubroutineInfo newSub
+					{
+						branchEndPtr != nullptr, subRequiresRuntimeStack(startPC, pc, nnn, c.instructions),
+						prevInstrCount, prevBranchCount
+					};
+
+					if (newSub.requiresRuntimeStack)
+						c.emit2NNN(nnn, pc, false);
 
 					if (branchEndPtr)
 					{
-						emitBlock(nnn, true, &condRetPoints);					
+						emitBlock(nnn, childFrames, &newSub);
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-						emitBlock(nnn, false, &condRetPoints);
+						emitBlock(nnn, childFrames, &newSub);
 
-					for (const auto& p : condRetPoints)
+					newRegAllocFrame();
+
+					for (const auto& p : newSub.condRetPoints)
 					{
 						c.patchBranchInstr(p.codePtr, false);
 
@@ -696,19 +845,19 @@ private:
 				}
 				else
 				{
-					c.emit2NNN(nnn, pc);
+					c.emit2NNN(nnn, pc, true);
 					flow = true;
 				}
 				break;
 			case 0x3000:
-				c.emit3XNN(x, nn, !isFlow(pc));
-				BRANCH();
+				branch([&](bool inc) { c.emit3XNN(x, nn, inc); });
+				break;
 			case 0x4000:
-				c.emit4XNN(x, nn, !isFlow(pc));
-				BRANCH();
+				branch([&](bool inc) { c.emit4XNN(x, nn, inc); });
+				break;
 			case 0x5000:
-				c.emit5XY0(x, y, !isFlow(pc));
-				BRANCH();
+				branch([&](bool inc) { c.emit5XY0(x, y, inc); });
+				break;
 			case 0x6000:
 				c.emit6XNN(x, nn);
 				break;
@@ -751,15 +900,12 @@ private:
 				}
 				break;
 			case 0x9000:
-				switch (n)
+				if (n == 0x0)
 				{
-				case 0x0:
-					c.emit9XY0(x, y, !isFlow(pc));
-					BRANCH();
-				default:
-					c.emitIllegalOPHandler();
+					branch([&](bool inc) { c.emit9XY0(x, y, inc); });
 					break;
 				}
+				c.emitIllegalOPHandler();
 				break;
 			case 0xA000:
 				c.emitANNN(nnn);
@@ -778,11 +924,11 @@ private:
 				switch (nn)
 				{
 				case 0x9E:
-					c.emitEX9E(x, !isFlow(pc));
-					BRANCH();
+					branch([&](bool inc) { c.emitEX9E(x, inc); });
+					break;
 				case 0xA1:
-					c.emitEXA1(x, !isFlow(pc));
-					BRANCH();
+					branch([&](bool inc) { c.emitEXA1(x, inc); });
+					break;
 				default:
 					c.emitIllegalOPHandler();
 					break;
@@ -812,9 +958,11 @@ private:
 					break;
 				case 0x33:
 					c.emitFX33(x, pc);
+					newRegAllocFrame();
 					break;
 				case 0x55:
 					c.emitFX55(x, pc);
+					newRegAllocFrame();
 					break;
 				case 0x65:
 					c.emitFX65(x); 
@@ -823,6 +971,9 @@ private:
 					c.emitIllegalOPHandler();
 					break;
 				}
+				break;
+			default:
+				c.emitIllegalOPHandler();
 				break;
 			}
 
@@ -840,7 +991,7 @@ private:
 			else if (flow)
 				break;
 
-			branchEndPtr = newBranchEndPtr;
+			branchEndPtr = std::exchange(newBranchEndPtr, nullptr);
 		}
 
 		c.emitEpilogue(flow ? -1 : pc & 0xFFF);

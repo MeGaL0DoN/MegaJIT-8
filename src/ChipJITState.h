@@ -9,7 +9,7 @@ struct JITBlock
 	uint32_t cacheSize{};
 	std::vector<std::pair<uint16_t, uint16_t>> pcRanges{};
 
-	JITBlock(uint16_t pc) : pc(pc) 
+	explicit JITBlock(uint16_t pc) : pc(pc)
 	{}
 };
 

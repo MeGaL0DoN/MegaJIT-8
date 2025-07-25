@@ -33,7 +33,7 @@ struct ChipState
 	uint8_t delayTimer{};
 	uint8_t soundTimer{};
 
-	std::array<uint64_t, SCR_HEIGHT> screenBuffer{};
+	alignas(32) std::array<uint64_t, SCR_HEIGHT> screenBuffer{};
 
 	std::array<uint8_t, 16> keys{};
 	int8_t inputReg { -1 };

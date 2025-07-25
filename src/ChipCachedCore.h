@@ -9,7 +9,7 @@
 class ChipCachedCore : public ChipCore
 {
 public:
-	ChipCachedCore(ChipState& s) : ChipCore(s)
+	explicit ChipCachedCore(ChipState& s) : ChipCore(s)
 	{}
 
 	FORCE_INLINE uint64_t execute() override
@@ -109,7 +109,7 @@ private:
 	static constexpr size_t BLOCK_MAX_INSTR { 255 };
 	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
 
-	inline void emitBlock(CacheBlock& block)
+	void emitBlock(CacheBlock& block)
 	{
 		block.instrCount = 0;
 
@@ -404,6 +404,9 @@ private:
 					buf.push_back({ &ChipCachedCore::op_INVALID, instr });
 					return;
 				}
+			default:
+				buf.push_back({ &ChipCachedCore::op_INVALID, instr });
+				return;
 			}
 		}
 	}
@@ -554,7 +557,6 @@ private:
 		uint8_t y = s.V[instr.y] & (ChipState::SCR_HEIGHT - 1);
 
 		s.V[0xF] = 0;
-		const bool partialDraw{ x > 56 };
 
 		for (int i = 0; i < N; i++)
 		{

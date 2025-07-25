@@ -3,7 +3,6 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
-#include <numeric>
 
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
@@ -11,40 +10,48 @@
 #include "ChipState.h"
 #include "macros.h"
 
+struct RegAllocation
+{
+	uint8_t ind;
+	bool needsLoad;
+	bool needsStore;
+};
+
 class ChipJITCore;
 
 class ChipEmitter : Xbyak::CodeGenerator
 {
+public:
+	static constexpr size_t MAX_CACHE_SIZE { 1048576 };
+	static constexpr int MAX_ALLOC_REGS { 5 };//{ 6 };
+	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
+
 private:
 	ChipJITCore& core;
 
 	Xbyak::util::Cpu cpuCaps;
-	bool AVX, BMI2, AMD;
+	bool SSE41, AVX, AVX2, BMI2, AMD_CPU;
 
-	inline void checkCPUSupport()
+	void checkCPUSupport()
 	{
 		cpuCaps = Xbyak::util::Cpu();
+		SSE41 = cpuCaps.has(Xbyak::util::Cpu::tSSE41);
 		AVX = cpuCaps.has(Xbyak::util::Cpu::tAVX);
+		AVX2 = cpuCaps.has(Xbyak::util::Cpu::tAVX2);
 		BMI2 = cpuCaps.has(Xbyak::util::Cpu::tBMI2);
-		AMD = cpuCaps.has(Xbyak::util::Cpu::tAMD);
+		AMD_CPU = cpuCaps.has(Xbyak::util::Cpu::tAMD);
 	}
 	
 	uint8_t* uncompiledBlockHandlerPtr;
 	uint8_t* dispatcherPtr;
 	uint64_t codeStartIndex;
 
-	int32_t executeFlagBaseOffset;
-	int32_t JITMapBaseOffset;
+	int32_t executeFlagBaseOffset, JITMapBaseOffset;
 	Xbyak::Label dispatcher, dispatcherEnd;
 
-	std::array<uint8_t, 16> allocatedVRegs{};
-
-	static constexpr int MAX_ALLOC_REGS { 6  };
-	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
-
-	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { sil, dil, r9b, r10b, r11b, r15b };
-	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { esi, edi, r9d, r10d, r11d, r15d };
-	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rsi, rdi, r9, r10, r11, r15 };
+	std::array<Xbyak::Reg8, MAX_ALLOC_REGS + 1> V_REGS_8 { sil, dil, r9b, r10b, r11b, r15b };
+	std::array<Xbyak::Reg32, MAX_ALLOC_REGS + 1> V_REGS_32 { esi, edi, r9d, r10d, r11d, r15d };
+	std::array<Xbyak::Reg64, MAX_ALLOC_REGS + 1> V_REGS_64 { rsi, rdi, r9, r10, r11, r15 };
 
 #ifdef _WIN32
 	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false };
@@ -55,7 +62,7 @@ private:
 	void MOV_VREG_TO_32(Xbyak::Reg32 dst, uint8_t reg);
 
 	template <typename Op>
-	inline void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
+	void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
 	{
 		if (!op1.isMEM() || !op2.isMEM())
 			op(op1, op2);
@@ -66,44 +73,44 @@ private:
 		}
 	}
 
-	inline void MOV(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void MOV(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			mov(dst, src);
 		});
 	}
-	inline void CMP(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void CMP(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			cmp(dst, src);
 		});
 	}
-	inline void AND(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void AND(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			and_(dst, src);
 		});
 	}
-	inline void XOR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void XOR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			xor_(dst, src);
 		});
 	}
-	inline void OR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void OR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			or_(dst, src);
 		});
 	}
-	inline void SUB(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void SUB(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			sub(dst, src);
 		});
 	}
-	inline void ADD(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
+	void ADD(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			add(dst, src);
 		});
 	}
 
-	bool emitSaveVregs();
-	void emitLoadVregs();
+	bool emitPushAllocRegs();
+	void emitPopAllocRegs();
 	void emitCallFunc(uint64_t func, bool stackAligned);
 
 	void emitBlockInvalidation(int count, uint16_t pc);
@@ -111,24 +118,24 @@ private:
 	void emitDispatcher();
 
 public:
-	static constexpr size_t MAX_CACHE_SIZE { 524288 };
 
-	std::array<int, 16> VRegWeight{};
-	std::array<bool, 16> modifiedVRegs{};
-	std::array<bool, 16> initialValUseVRegs{};
+	//std::array<int, 16> VRegWeight{};
+	//std::array<bool, 16> modifiedVRegs{};
+	//std::array<bool, 16> initialValUseVRegs{};
 
+	std::array<RegAllocation, 16> allocatedRegs;
 	uint16_t instructions { 0 };
 	uint16_t branchedInstrs { 0 };
 
 	ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag);
 
-	inline uint8_t* getCodePtr() const { return const_cast<uint8_t*>(getCode()); }
-	inline uint8_t* getCodeEndPtr() const { return getCodePtr() + getSize(); }
-	inline size_t getCodeSize() const { return getSize(); }
+	uint8_t* getCodePtr() const { return const_cast<uint8_t*>(getCode()); }
+	uint8_t* getCodeEndPtr() const { return getCodePtr() + getSize(); }
+	size_t getCodeSize() const { return getSize(); }
 
 	uint8_t* getUncompiledPtr() const { return uncompiledBlockHandlerPtr; }
 
-	inline void clearCache()
+	void clearCache()
 	{
 		setSize(codeStartIndex);
 	}
@@ -138,10 +145,13 @@ public:
 		return reinterpret_cast<uint64_t(*)()>(dispatcherPtr)();
 	}
 	
-	void reset();
-	void allocateRegs();
-	void emitPrologue();
+	void newBlock();
+	//void allocateRegs();
+	//void emitPrologue();
 	void emitEpilogue(uint16_t pc = -1);
+
+	void emitLoadAllocRegs();
+	void emitStoreAllocRegs();
 
 	void emitIllegalOPHandler();
 	void emitBreakpoint();
@@ -150,13 +160,13 @@ public:
 	void emitInstrCountAddPlaceholder();
 	void emitInstrCountAdd(int32_t instrs);
 
-	void patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch);
-	void patchImm32(uint8_t* codeEndPtr, int32_t imm);
+	void patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBranch) const;
+	void patchImm32(uint8_t* codeEndPtr, int32_t imm) const;
 
 	void emit00E0();
-	void emit00EE();
+	void emit00EE(bool restorePC);
 	void emit1NNN(uint16_t addr);
-	void emit2NNN(uint16_t addr, uint16_t pc);
+	void emit2NNN(uint16_t addr, uint16_t pc, bool setPC);
 	void emit5XY0(uint8_t x, uint8_t y, bool incBranches);
 	void emit9XY0(uint8_t x, uint8_t y, bool incBranches);
 	void emit3XNN(uint8_t x, uint8_t val, bool incBranches);

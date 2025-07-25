@@ -9,7 +9,7 @@
 class ChipInterpretCore : public ChipCore
 {
 public:
-	ChipInterpretCore(ChipState& s) : ChipCore(s)
+	explicit ChipInterpretCore(ChipState& s) : ChipCore(s)
 	{}
 
 	FORCE_INLINE uint64_t execute() override
@@ -238,6 +238,10 @@ public:
 				break;
 			}
 			break;
+		default:
+			s.pc -= 2;
+			assert(false);
+			break;
 		}
 
 		return 1;
@@ -255,7 +259,7 @@ private:
 	std::default_random_engine eng { std::random_device{}() };
 	std::uniform_int_distribution<> rng { 0, 255 };
 
-	inline void drawSprite(uint8_t x, uint8_t y, uint8_t height)
+	void drawSprite(uint8_t x, uint8_t y, uint8_t height) const
 	{
 		s.V[0xF] = 0;
 
