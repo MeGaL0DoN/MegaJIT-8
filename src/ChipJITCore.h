@@ -34,6 +34,7 @@ public:
 	{
 		JIT.blocks.clear();
 		std::fill_n(JIT.blockMap.begin(), ChipState::RAM_SIZE, c.getUncompiledPtr());
+		std::memset(JIT.compiledRam.data(), 0, sizeof(ChipJITState::compiledRam));
 		c.clearCache();
 	}
 
@@ -79,7 +80,7 @@ public:
 
 			firstBlock = false;
 
-			outFile << "Block at PC: " << std::hex << "0x" << block.pc << "-0x" << block.pcRanges.back().second
+			outFile << "Block at PC: " << std::hex << "0x" << block.pc// << "-0x" << block.pcRanges.back().second
 					<< "\n-----------------------------------------";
 
 			ZyanUSize offset { 0 };
@@ -153,13 +154,13 @@ private:
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
 
-		for (auto& b : JIT.blocks)
+		for (auto& b : JIT.blocks) // trying to reuse block element (if any was invalidated)
 		{
 			if (JIT.blockMap[b.pc] == c.getUncompiledPtr())
 			{
 				block = &b;
 				block->pc = pc;
-				block->pcRanges.clear();
+				std::memset(block->compiledRam.data(), 0, sizeof(JITBlock::compiledRam));
 				break;
 			}
 		}
@@ -618,33 +619,6 @@ private:
 		return pc;
 	}
 
-	// BROKEN REG ALLOCATION BETWEEN BLOCKS!
-	
-	//: main
-	//	loop
-	//	v0 : = 0
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 += 5
-	//	v0 : = 0
-	//	if v0 == 0 then
-	//		test
-	//		v0 += 3
-	//		again
-
-	//		: test
-	//		v1 += 7
-	//		v1 += 7
-	//		return
-
-
 	// 	: main
 	// loop
 	//  v0 := 0
@@ -684,17 +658,10 @@ private:
 			blockFlagCalcList.pop();
 			return val;
 		};
-		const auto addPcRange = [&]()
-		{
-			const auto range { std::make_pair(startPC, static_cast<uint16_t>(pc - 1)) };
-
-			if (std::ranges::find(block->pcRanges, range) == block->pcRanges.end())
-				block->pcRanges.push_back(range);
-		};
 		const auto newRegAllocFrame = [&]()
 		{
 			c.emitStoreAllocRegs();
-			alloc++;
+			//alloc++;
 			//c.allocatedRegs = alloc++->allocation;
 			c.emitLoadAllocRegs();
 		};
@@ -715,8 +682,10 @@ private:
 		{
 			const uint16_t prevInstrCount { c.instructions }, prevBranchCount { c.branchedInstrs };
 			c.instructions++;
-
 			bool inlinedBlock { false };
+
+			JIT.compiledRam[pc >> 6] |= (1ull << (pc & 63));
+			block->compiledRam[pc >> 6] |= (1ull << (pc & 63));
 
 			const uint16_t opcode = (s.RAM[pc] << 8) | s.RAM[pc + 1];
 			pc += 2;
@@ -744,27 +713,19 @@ private:
 						if (sub->conditional)
 							c.emitInstrCountAdd((c.instructions - sub->startInstrCount) - (c.branchedInstrs - sub->startBranchCount));
 
-						if (branchEndPtr || conditionalBlock)
-						{
-							if (!sub->conditional)
-								c.emitInstrCountAddPlaceholder(); // to later subtract the number of remaining instructions in the subroutine.
-
-							sub->condRetPoints.emplace_back(c.emitJumpPlaceholder(), c.instructions, c.branchedInstrs);
-
-							if (!branchEndPtr)
-							{
-								addPcRange();
-								return pc;
-							}
-
-							c.branchedInstrs++;
-							inlinedBlock = true;
-						}
-						else
-						{
-							addPcRange();
+						if (!branchEndPtr && !conditionalBlock)
 							return pc;
-						}
+
+						if (!sub->conditional)
+							c.emitInstrCountAddPlaceholder(); // to later subtract the number of remaining instructions in the subroutine.
+
+						sub->condRetPoints.emplace_back(c.emitJumpPlaceholder(), c.instructions, c.branchedInstrs);
+
+						if (!branchEndPtr)
+							return pc;
+
+						c.branchedInstrs++;
+						inlinedBlock = true;
 					}
 					else
 					{
@@ -793,7 +754,6 @@ private:
 					}
 					else
 					{
-						addPcRange();
 						newRegAllocFrame();
 						return emitBlock(nnn, alloc, sub, conditionalBlock);
 					}
@@ -807,7 +767,7 @@ private:
 			case 0x2000:
 				if (isInlinableFlow(startPC, pc, nnn))
 				{
-					const auto childFrames { alloc->childFrames.data() };
+					//const auto childFrames { alloc->childFrames.data() };
 					newRegAllocFrame();
 
 					SubroutineInfo newSub
@@ -821,13 +781,13 @@ private:
 
 					if (branchEndPtr)
 					{
-						emitBlock(nnn, childFrames, &newSub);
+						emitBlock(nnn, /*childFrames*/nullptr, &newSub);
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-						emitBlock(nnn, childFrames, &newSub);
+						emitBlock(nnn, /*childFrames*/nullptr, &newSub);
 
 					newRegAllocFrame();
 
@@ -995,30 +955,20 @@ private:
 		}
 
 		c.emitEpilogue(flow ? -1 : pc & 0xFFF);
-		addPcRange();
 		return pc;
 
 #undef BRANCH
 	}
 
-	bool invalidateBlocks(uint16_t startAddr, uint16_t endAddr)
+	void invalidateBlocks(uint64_t ind, uint64_t mask)
 	{
-		bool invalidated { false };
+		JIT.compiledRam[ind] &= ~mask;
 
 		for (const auto& block : JIT.blocks)
 		{
-			for (const auto& range : block.pcRanges)
-			{
-				if (range.first <= endAddr && range.second >= startAddr)
-				{
-					JIT.blockMap[block.pc] = c.getUncompiledPtr();
-					invalidated = true;
-					break;
-				}
-			}
+			if (block.compiledRam[ind] & mask)
+				JIT.blockMap[block.pc] = c.getUncompiledPtr();
 		}
-
-		return invalidated;
 	}
 
 	void illegalOpcodeHandler()
