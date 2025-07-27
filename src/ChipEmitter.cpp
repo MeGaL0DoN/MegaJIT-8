@@ -221,48 +221,30 @@ void ChipEmitter::emitCallFunc(uint64_t func, bool stackAligned)
 #endif
 }
 
-void ChipEmitter::emitBlockInvalidation(int count, uint16_t pc)
+void ChipEmitter::emitSelfModifyingCodeCheck(int count, uint16_t pc)
 {
 	const int32_t bitsetOffset { static_cast<int32_t>(reinterpret_cast<uint64_t>(&core.JIT.compiledRam) - reinterpret_cast<uint64_t>(&core.s)) };
 
-	mov(ecx, I_REG_32);
-	and_(ecx, 63);
-	mov(r8, (1ULL << count) - 1);
-	xor_(eax, eax); // smc flag, starting with 0 = no smc
-
-	Xbyak::Label noBitsPastBoundary, after;
-
-	cmp(ecx, 64 - count); // check if (bit + count) > 64 (next qword needs to be tested too)
-	jbe(noBitsPastBoundary);
-	lea(edx, ptr[rcx - (64 - count)]);
-	sub(ecx, edx);
-	shl(r8, cl);
-	mov(ecx, edx); // saving the remainder
-	jmp(after);
-
-	L(noBitsPastBoundary);
-	shl(r8, cl);
-	xor_(ecx, ecx);
-	L(after);
-
-	auto checkSmc = [&](bool secondTest)
+	auto checkSmc = [&](bool secondTest, bool endImmediately)
 	{
 		Xbyak::Label noSmc;
 
-		mov(edx, I_REG_32);
-		shr(edx, 6);
+		if (!secondTest)
+		{
+			mov(edx, I_REG_32);
+			shr(edx, 6);
+			test(qword[BASE + rdx * 8 + bitsetOffset], r8);
+		}
+		else
+			test(qword[BASE + rdx * 8 + bitsetOffset + 8], r8);
 
-		if (secondTest)
-			inc(edx);
-
-		test(qword[BASE + bitsetOffset + rdx * 8], r8);
 		jz(noSmc, T_NEAR);
 
 		bool stackAligned { emitPushAllocRegs() };
 
-		if (!secondTest) // save second test needed flag
+		if (!secondTest && !endImmediately)
 		{
-			push(rcx);
+			push(rcx); // remainder
 			stackAligned = !stackAligned;
 		}
 
@@ -273,32 +255,58 @@ void ChipEmitter::emitBlockInvalidation(int count, uint16_t pc)
 #endif
 		emitCallFunc(addr(&ChipJITCore::invalidateBlocks), stackAligned);
 
-		if (!secondTest)
+		if (!secondTest && !endImmediately)
+		{
 			pop(rcx);
+			// reloading index
+			mov(edx, I_REG_32);
+			shr(edx, 6);
+		}
 
 		emitPopAllocRegs();
-		mov(al, 1); // smc flag
+
+		if (endImmediately)
+			emitEpilogue(pc); // exiting the current block, because self-modifying code could modify it.
+		else
+			mov(al, 1); // smc flag
 
 		L(noSmc);
 	};
 
-	checkSmc(false);
+	mov(ecx, I_REG_32);
+	and_(ecx, 64 - 1);
+	mov(r8d, (1ULL << count) - 1);
 
-	Xbyak::Label noSecondTest, noSmc;
+	Xbyak::Label noBitsPastBoundary, end;
 
-	test(ecx, ecx);
-	jz(noSecondTest, T_NEAR);
-	// setting r8 to a mask with 'ecx' low bits set.
-	mov(r8d, 1);
+	cmp(ecx, 64 - count); // check if (bit + count) > 64 (next qword needs to be tested too)
+	jbe(noBitsPastBoundary, T_NEAR);
+	lea(edx, ptr[rcx - (64 - count)]);
+	xor_(eax, eax); // smc flag
+	sub(ecx, edx);
 	shl(r8, cl);
-	dec(r8);
-	checkSmc(true);
-	L(noSecondTest);
+	mov(ecx, edx); // saving the remainder
+	checkSmc(false, false);
 
-	test(al, al);
-	jz(noSmc, T_NEAR);
-	emitEpilogue(pc); // exiting the current block, because self-modifying code could modify it.
-	L(noSmc);
+	// setting r8d to a mask with 'ecx' low bits set.
+	mov(r8d, -1);
+	if (BMI2)
+		bzhi(r8d, r8d, ecx);
+	else
+	{
+		shl(r8d, cl);
+		not_(r8d);
+	}
+
+	checkSmc(true, false);
+	test(al, al); // smc check
+	jz(end, T_NEAR);
+	emitEpilogue(pc);
+
+	L(noBitsPastBoundary);
+	shl(r8, cl);
+	checkSmc(false, true);
+	L(end);
 }
 
 void ChipEmitter::emitIllegalOPHandler()
@@ -1075,7 +1083,7 @@ void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 	sub(al, cl);
 	mov(RAM_PTR(2), al);
 
-	emitBlockInvalidation(3, pc);
+	emitSelfModifyingCodeCheck(3, pc);
 	L(oob);
 }
 
@@ -1092,7 +1100,7 @@ void ChipEmitter::emitFX55(uint8_t x, uint16_t pc)
 	for (int i = 0; i <= x; i++)
 		MOV(RAM_PTR(i), V_REG(i));
 
-	emitBlockInvalidation(x + 1, pc);
+	emitSelfModifyingCodeCheck(x + 1, pc);
 
 	if (quirks.memoryIncrement)
 	{

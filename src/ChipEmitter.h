@@ -113,7 +113,7 @@ private:
 	void emitPopAllocRegs();
 	void emitCallFunc(uint64_t func, bool stackAligned);
 
-	void emitBlockInvalidation(int count, uint16_t pc);
+	void emitSelfModifyingCodeCheck(int count, uint16_t pc);
 	void emitUncompiledBlockHandler();
 	void emitDispatcher();
 
