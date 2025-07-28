@@ -5,6 +5,7 @@
 #include <array>
 #include <vector>
 #include <ranges>
+#include <utility>
 #include <filesystem>
 #include <algorithm>
 #include <queue>
@@ -86,10 +87,10 @@ public:
 			ZyanUSize offset { 0 };
 			ZydisDecodedInstruction instruction;
 			ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-			char textBuffer[256];
 
 			while (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf + offset, block.cacheSize - offset, &instruction, operands)))
 			{
+				char textBuffer[256];
 				ZydisFormatterFormatInstruction(&formatter, &instruction, operands, instruction.operand_count_visible, textBuffer, sizeof(textBuffer), runtimeAddress, nullptr);
 				outFile << "\n0x" << std::hex << std::setw(8) << std::setfill('0') << runtimeAddress << " | " << textBuffer;
 

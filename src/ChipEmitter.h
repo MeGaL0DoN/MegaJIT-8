@@ -109,11 +109,14 @@ private:
 		});
 	}
 
+	template <bool toMem>
+	void emitRegCopy(int cnt);
+	void emitSelfModifyingCodeCheck(int cnt, uint16_t pc);
+
 	bool emitPushAllocRegs();
 	void emitPopAllocRegs();
 	void emitCallFunc(uint64_t func, bool stackAligned);
 
-	void emitSelfModifyingCodeCheck(int count, uint16_t pc);
 	void emitUncompiledBlockHandler();
 	void emitDispatcher();
 

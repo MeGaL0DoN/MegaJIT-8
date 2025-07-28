@@ -22,7 +22,7 @@ struct ChipState
 	static constexpr int SCR_HEIGHT { 32 };
 
 	std::array<uint8_t, RAM_SIZE + RAM_DEADBUF_SIZE> RAM{};
-	std::array<uint8_t, 16> V{};
+	alignas (16) std::array<uint8_t, 16> V{};
 
 	std::array<uint16_t, 256> stack{};
 	uint8_t sp{};

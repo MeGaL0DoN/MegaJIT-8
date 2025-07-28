@@ -221,7 +221,7 @@ void ChipEmitter::emitCallFunc(uint64_t func, bool stackAligned)
 #endif
 }
 
-void ChipEmitter::emitSelfModifyingCodeCheck(int count, uint16_t pc)
+void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 {
 	const int32_t bitsetOffset { static_cast<int32_t>(reinterpret_cast<uint64_t>(&core.JIT.compiledRam) - reinterpret_cast<uint64_t>(&core.s)) };
 
@@ -275,13 +275,13 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int count, uint16_t pc)
 
 	mov(ecx, I_REG_32);
 	and_(ecx, 64 - 1);
-	mov(r8d, (1ULL << count) - 1);
+	mov(r8d, (1ULL << cnt) - 1);
 
 	Xbyak::Label noBitsPastBoundary, end;
 
-	cmp(ecx, 64 - count); // check if (bit + count) > 64 (next qword needs to be tested too)
+	cmp(ecx, 64 - cnt); // check if (bit + count) > 64 (next qword needs to be tested too)
 	jbe(noBitsPastBoundary, T_NEAR);
-	lea(edx, ptr[rcx - (64 - count)]);
+	lea(edx, ptr[rcx - (64 - cnt)]);
 	xor_(eax, eax); // smc flag
 	sub(ecx, edx);
 	shl(r8, cl);
@@ -1059,23 +1059,17 @@ void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 	Xbyak::Label oob;
 	movzx(eax, V_REG(x));
 
-	lea(edx, ptr[rax + 4 * rax]);
-	lea(ecx, ptr[rax + 8 * rdx]);
+	lea(ecx, ptr[rax + 4 * rax]);
+	lea(ecx, ptr[rax + 8 * rcx]);
 	shr(ecx, 12);
 	mov(RAM_PTR(0), cl);
 	cmp(I_REG_32, 0xFFF);
 	je(oob, T_NEAR);
+	imul(ecx, ecx, 100);
+	sub(eax, ecx);
 	imul(ecx, eax, 205);
 	shr(ecx, 11);
-	lea(edx, ptr[rcx + 4 * rcx]);
-	lea(edx, ptr[rdx + 4 * rdx]);
-	add(edx, ecx);
-	shr(edx, 7);
-	and_(edx, 6);
-	lea(edx, ptr[rdx + 4 * rdx]);
-	mov(r8d, ecx);
-	sub(r8b, dl);
-	mov(RAM_PTR(1), r8b);
+	mov(RAM_PTR(1), cl);
 	cmp(I_REG_32, 0xFFE);
 	je(oob, T_NEAR);
 	add(ecx, ecx);
@@ -1085,6 +1079,117 @@ void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 
 	emitSelfModifyingCodeCheck(3, pc);
 	L(oob);
+}
+
+template <bool toMem>
+void ChipEmitter::emitRegCopy(int cnt)
+{
+	auto regsNotAllocated = [&](int startInd, int endInd) -> bool
+	{
+		for (int i = startInd; i < endInd; i++)
+		{
+			if (allocatedRegs[i].ind != NOT_ALLOCATED)
+				return false;
+		}
+
+		return true;
+	};
+
+	if (cnt == 16 && regsNotAllocated(0, 16))
+	{
+		if (AVX)
+		{
+			if constexpr (toMem)
+			{
+				vmovdqa(xmm0, REG_PTR(0));
+				vmovdqu(RAM_PTR(0), xmm0);
+			}
+			else
+			{
+				vmovdqu(xmm0, RAM_PTR(0));
+				vmovdqa(REG_PTR(0), xmm0);
+			}
+		}
+		else
+		{
+			if constexpr (toMem)
+			{
+				movdqa(xmm0, REG_PTR(0));
+				movdqu(RAM_PTR(0), xmm0);
+			}
+			else
+			{
+				movdqu(xmm0, RAM_PTR(0));
+				movdqa(REG_PTR(0), xmm0);
+			}
+		}
+
+		return;
+	}
+
+	for (int i = 0; cnt > 0; )
+	{
+		if (cnt >= 8 && regsNotAllocated(i, i + 8))
+		{
+			if constexpr (toMem)
+			{
+				mov(rax, REG_PTR(i));
+				mov(RAM_PTR(i), rax);
+			}
+			else
+			{
+				mov(rax, RAM_PTR(i));
+				mov(REG_PTR(i), rax);
+			}
+
+			i += 8;
+			cnt -= 8;
+			continue;
+		}
+		if (cnt >= 4 && regsNotAllocated(i, i + 4))
+		{
+			if constexpr (toMem)
+			{
+				mov(eax, REG_PTR(i));
+				mov(RAM_PTR(i), eax);
+			}
+			else
+			{
+				mov(eax, RAM_PTR(i));
+				mov(REG_PTR(i), eax);
+
+			}
+
+			i += 4;
+			cnt -= 4;
+			continue;
+		}
+		if (cnt >= 2 && regsNotAllocated(i, i + 2))
+		{
+			if constexpr (toMem)
+			{
+				mov(ax, REG_PTR(i));
+				mov(RAM_PTR(i), ax);
+			}
+			else
+			{
+				mov(ax, RAM_PTR(i));
+				mov(REG_PTR(i), ax);
+			}
+
+			i += 2;
+			cnt -= 2;
+			continue;
+		}
+
+		if constexpr (toMem)
+			MOV(RAM_PTR(i), V_REG(i));
+		else
+			MOV(V_REG(i), RAM_PTR(i));
+
+		i++;
+		cnt--;
+	}
 }
 
 void ChipEmitter::emitFX55(uint8_t x, uint16_t pc)
@@ -1097,14 +1202,13 @@ void ChipEmitter::emitFX55(uint8_t x, uint16_t pc)
 		ja(oob, T_NEAR);
 	}
 
-	for (int i = 0; i <= x; i++)
-		MOV(RAM_PTR(i), V_REG(i));
-
-	emitSelfModifyingCodeCheck(x + 1, pc);
+	const int cnt { x + 1 };
+	emitRegCopy<true>(cnt);
+	emitSelfModifyingCodeCheck(cnt, pc);
 
 	if (quirks.memoryIncrement)
 	{
-		add(I_REG_32, x + 1);
+		add(I_REG_32, cnt);
 		and_(I_REG_32, 0xFFF);
 	}
 
@@ -1112,12 +1216,12 @@ void ChipEmitter::emitFX55(uint8_t x, uint16_t pc)
 }
 void ChipEmitter::emitFX65(uint8_t x)
 {
-	for (int i = 0; i <= x; i++)
-		MOV(V_REG(i), RAM_PTR(i));
+	const int cnt { x + 1 };
+	emitRegCopy<false>(cnt);
 
 	if (quirks.memoryIncrement)
 	{
-		add(I_REG_32, x + 1);
+		add(I_REG_32, cnt);
 		and_(I_REG_32, 0xFFF);
 	}
 }
