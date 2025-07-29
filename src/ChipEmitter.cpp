@@ -125,9 +125,6 @@ void ChipEmitter::emitDispatcher()
 
 	mov(rax, INSTR_COUNT);
 
-	if (AVX)
-		vzeroupper();
-
 	add(rsp, 8); 
 #ifdef _WIN32
 	pop(rdi);
@@ -202,9 +199,6 @@ void ChipEmitter::emitPopAllocRegs()
 }
 void ChipEmitter::emitCallFunc(uint64_t func, bool stackAligned) 
 {
-	if (AVX)
-		vzeroupper();
-
 #ifdef _WIN32
 	sub(rsp, WIN_SHADOW_SPACE + (stackAligned ? 0 : 8));
 #else
@@ -311,6 +305,7 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 
 void ChipEmitter::emitIllegalOPHandler()
 {
+	//int3();
 	const bool stackAligned { emitPushAllocRegs() };
 	mov(ARG1, reinterpret_cast<uint64_t>(&core));
 	emitCallFunc(addr(&ChipJITCore::illegalOpcodeHandler), stackAligned);
@@ -418,7 +413,7 @@ void ChipEmitter::emit00E0()
 {
 	if (AVX)
 	{
-		vxorpd(ymm0, ymm0, ymm0);
+		vpxor(xmm0, xmm0, xmm0);
 
 		for (int i = 0; i < 32; i += 4)
 			vmovdqa(SCREEN_PTR(i), ymm0);
@@ -436,10 +431,20 @@ void ChipEmitter::emit00E0()
 
 void ChipEmitter::emit00EE(bool restorePC)
 {
+	//Xbyak::Label crash, end;
+	//cmp(SP_32, 0);
+	//jz(crash);
+
 	dec(SP_8);
 
 	if (restorePC)
 		movzx(PC_32, STACK_PTR);
+
+	//jmp(end);
+
+	//L(crash);
+	//int3();
+	//L(end);
 }
 
 void ChipEmitter::emit1NNN(uint16_t addr)
@@ -463,7 +468,7 @@ void ChipEmitter::emit5XY0(uint8_t x, uint8_t y, bool incBranches)
 	// jz
 	db(0x0F);
 	db(0x84);
-	dd(0); // reserve 4 bytes for offset
+	dd(0); // reserve 4 bytes for the offset
 
 	if (incBranches)
 		inc(INSTR_COUNT);
@@ -507,7 +512,7 @@ void ChipEmitter::emitEX9E(uint8_t x, bool incBranches)
 	MOV_VREG_TO_32(ecx, x);
 	and_(ecx, 0xF);
 	movzx(ecx, KEY_PTR(rcx));
-	test(ecx, ecx);
+	test(cl, cl);
 	// jnz
 	db(0x0F);
 	db(0x85);
@@ -521,7 +526,7 @@ void ChipEmitter::emitEXA1(uint8_t x, bool incBranches)
 	MOV_VREG_TO_32(ecx, x);
 	and_(ecx, 0xF);
 	movzx(ecx, KEY_PTR(rcx));
-	test(ecx, ecx);
+	test(cl, cl);
 	// jz
 	db(0x0F);
 	db(0x84);
@@ -1063,14 +1068,14 @@ void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 	lea(ecx, ptr[rax + 8 * rcx]);
 	shr(ecx, 12);
 	mov(RAM_PTR(0), cl);
-	cmp(I_REG_32, 0xFFF);
+	cmp(I_REG_16, 0xFFF);
 	je(oob, T_NEAR);
 	imul(ecx, ecx, 100);
 	sub(eax, ecx);
 	imul(ecx, eax, 205);
 	shr(ecx, 11);
 	mov(RAM_PTR(1), cl);
-	cmp(I_REG_32, 0xFFE);
+	cmp(I_REG_16, 0xFFE);
 	je(oob, T_NEAR);
 	add(ecx, ecx);
 	lea(ecx, ptr[rcx + 4 * rcx]);
@@ -1168,12 +1173,12 @@ void ChipEmitter::emitRegCopy(int cnt)
 		{
 			if constexpr (toMem)
 			{
-				mov(ax, REG_PTR(i));
+				movzx(eax, word[BASE + offsetof(ChipState, V) + i]);
 				mov(RAM_PTR(i), ax);
 			}
 			else
 			{
-				mov(ax, RAM_PTR(i));
+				movzx(eax, word[BASE + I_REG_64 + offsetof(ChipState, RAM) + i]);
 				mov(REG_PTR(i), ax);
 			}
 
@@ -1198,7 +1203,7 @@ void ChipEmitter::emitFX55(uint8_t x, uint16_t pc)
 
 	if (x != 0)
 	{
-		cmp(I_REG_32, 0xFFF - x);
+		cmp(I_REG_16, 0xFFF - x);
 		ja(oob, T_NEAR);
 	}
 

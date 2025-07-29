@@ -68,8 +68,8 @@ private:
 			op(op1, op2);
 		else
 		{
-			mov(cl, op2);
-			op(op1, cl);
+			movzx(eax, op2);
+			op(op1, al);
 		}
 	}
 

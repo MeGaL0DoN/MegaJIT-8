@@ -219,8 +219,9 @@ private:
 		}
 	}
 
-	inline bool subRequiresRuntimeStack(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
+	bool subRequiresRuntimeStack(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
 	{
+		// return true;
 		bool branch { false };
 		const uint16_t startNNN { nnn };
 		
@@ -245,11 +246,16 @@ private:
 				}
 				break;
 			case 0x1000:
+			{
+				if (!isInlinableFlow(startPC, pc, opcode & 0xFFF) || !isInlinableFlow(startNNN, nnn, opcode & 0xFFF))
+					return true;
+
 				if (!branch)
-					return subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs);
+					return subRequiresRuntimeStack(startPC, nnn, opcode & 0xFFF, instrs);
 				if (subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs))
 					return true;
 				break;
+			}
 			case 0x2000:
 				if (subRequiresRuntimeStack(startNNN, nnn, opcode & 0xFFF, instrs))
 					return true;
@@ -284,7 +290,7 @@ private:
 		return true;
 	}
 
-	inline bool isFlow(uint16_t pc) const
+	bool isFlow(uint16_t pc) const
 	{
 		const uint16_t opcode = (s.RAM[pc] << 8) | s.RAM[pc + 1];
 
@@ -302,7 +308,7 @@ private:
 				return false;
 		}
 	}
-	inline bool isInlinableFlow(uint16_t startPC, uint16_t pc, uint16_t nnn) const
+	bool isInlinableFlow(uint16_t startPC, uint16_t pc, uint16_t nnn) const
 	{
 		return (nnn < startPC || nnn >= pc) && c.instructions < instructionsPerBlock;
 	}
