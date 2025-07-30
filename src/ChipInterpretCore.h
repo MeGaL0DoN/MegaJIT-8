@@ -9,6 +9,8 @@
 class ChipInterpretCore : public ChipCore
 {
 public:
+	std::array<uint64_t, 16> usage{};
+
 	explicit ChipInterpretCore(ChipState& s) : ChipCore(s)
 	{}
 

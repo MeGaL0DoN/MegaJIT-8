@@ -33,11 +33,16 @@
 #define PC_PTR word[BASE + offsetof(ChipState, pc)]
 #define SP_PTR byte[BASE + offsetof(ChipState, sp)]
 
-#define STACK_PTR word[BASE + offsetof(ChipState, stack) + (SP_64 * sizeof(uint16_t))]
-#define KEY_PTR(offset) byte[BASE + offsetof(ChipState, keys) + offset]
 #define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
 #define RAM_PTR(offset) byte[BASE + I_REG_64 + offsetof(ChipState, RAM) + offset]
 #define SCREEN_PTR(offset) ptr[BASE + offsetof(ChipState, screenBuffer) + (offset * sizeof(uint64_t))]
+#define STACK_PTR word[BASE + offsetof(ChipState, stack) + (SP_64 * sizeof(uint16_t))]
+
+#define DELAY_PTR byte[BASE + offsetof(ChipState, delayTimer)]
+#define SOUND_PTR byte[BASE + offsetof(ChipState, soundTimer)]
+#define KEY_PTR(offset) byte[BASE + offsetof(ChipState, keys) + offset]
+#define FX0A_FLAG_PTR byte[BASE + offsetof(ChipState, firstFX0ACall)]
+#define FX0A_REG_PTR byte[BASE + offsetof(ChipState, inputReg)]
 
 #define BLOCK_PTR qword[BASE + JITMapBaseOffset + (PC_64 * 8)]
 #define EXECUTE_FLAG_PTR byte[BASE + executeFlagBaseOffset]
@@ -56,6 +61,9 @@ ChipEmitter::ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag) : Xbyak
 {
 	checkCPUSupport();
 
+	L(rspBackup);
+	dq(0);
+
 	uncompiledBlockHandlerPtr = getCodeEndPtr();
 	emitUncompiledBlockHandler();
 
@@ -68,8 +76,8 @@ ChipEmitter::ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag) : Xbyak
 
 void ChipEmitter::newBlock()
 {
-	std::ranges::fill(allocatedRegs,  RegAllocation { NOT_ALLOCATED });
-	allocatedRegs[0xF] = RegAllocation{ MAX_ALLOC_REGS };
+	std::ranges::fill(allocatedRegs, RegAllocation { NOT_ALLOCATED });
+	allocatedRegs[0xF] = RegAllocation { MAX_ALLOC_REGS - 1 };
 
 	//std::memset(allocatedVRegs.data(), NOT_ALLOCATED, sizeof(allocatedVRegs));
 	//allocatedVRegs[0xF] = MAX_ALLOC_REGS - 1; // V[0xF] is always allocated in r15.
@@ -84,6 +92,7 @@ void ChipEmitter::newBlock()
 
 void ChipEmitter::emitUncompiledBlockHandler()
 {
+	mov(rsp, qword[rip + rspBackup]);
 	mov(ARG1, reinterpret_cast<uint64_t>(&core));
 	mov(ARG2, PC_64);
 	emitCallFunc(addr(&ChipJITCore::compileBlock), true);
@@ -103,18 +112,18 @@ void ChipEmitter::emitDispatcher()
 	push(rsi);
 	push(rdi);
 #endif
-	sub(rsp, 8); // 16-byte alignment
+	sub(rsp, 8 + WIN_SHADOW_SPACE); // for 16-byte alignment + shadow space on windows
+	mov(qword[rip + rspBackup], rsp);
 
 	mov(BASE, reinterpret_cast<uint64_t>(&core.s));
 	JITMapBaseOffset = static_cast<int32_t>(reinterpret_cast<uint64_t>(&core.JIT.blockMap) - reinterpret_cast<uint64_t>(&core.s));
 
+	xor_(INSTR_COUNT, INSTR_COUNT);
 	movzx(I_REG_32, I_REG_PTR);
 	movzx(PC_32, PC_PTR);
 	movzx(SP_32, SP_PTR);
 	movzx(FLAG_REG_32, REG_PTR(0xF));
-	xor_(INSTR_COUNT, INSTR_COUNT);
 
-	L(dispatcher);
 	jmp(BLOCK_PTR);
 	L(dispatcherEnd);
 
@@ -125,7 +134,8 @@ void ChipEmitter::emitDispatcher()
 
 	mov(rax, INSTR_COUNT);
 
-	add(rsp, 8); 
+	mov(rsp, qword[rip + rspBackup]);
+	add(rsp, 8 + WIN_SHADOW_SPACE); 
 #ifdef _WIN32
 	pop(rdi);
 	pop(rsi);
@@ -138,6 +148,16 @@ void ChipEmitter::emitDispatcher()
 	pop(rbp);
 	pop(rbx);
 	ret();
+}
+
+void ChipEmitter::MOV_TO_REG(uint8_t r, const Xbyak::Operand& op)
+{
+	const auto i { allocatedRegs[r].ind };
+
+	if (i != NOT_ALLOCATED)
+		movzx(V_REGS_32[i], op); // breaking dependency
+	else
+		MOV(REG_PTR(r), op);
 }
 
 void ChipEmitter::emitLoadAllocRegs()
@@ -157,22 +177,27 @@ void ChipEmitter::emitStoreAllocRegs()
 	}
 }
 
-// 32 -> 32 reg movs can take 0 cycle due to register renaming, so doing them whenever possible.
-void ChipEmitter::MOV_VREG_TO_32(Xbyak::Reg32 dst, uint8_t reg)
-{
-	const auto val { allocatedRegs[reg].ind };
-
-	if (val != NOT_ALLOCATED)
-		mov(dst, V_REGS_32[val]);
-	else
-		movzx(dst, V_REG(reg));
-}
-
 bool ChipEmitter::emitPushAllocRegs()
 {
-	bool stackAligned { true };
+	rspReg = -1;
 
 	for (int i = 0; i < 16; i++)
+	{
+		if (allocatedRegs[i].ind == RSP_ALLOC_IND)
+		{
+			rspReg = i;
+			break;
+		}
+	}
+
+	if (rspReg != -1)
+		mov(REG_PTR(rspReg), spl);
+
+	mov(rsp, qword[rip + rspBackup]);
+
+	bool stackAligned { true };
+
+	for (int i = 0; i < 16; i++) 
 	{
 		const auto val { allocatedRegs[i].ind };
 
@@ -196,23 +221,17 @@ void ChipEmitter::emitPopAllocRegs()
 
 		pop(V_REGS_64[val]);
 	}
+
+	if (rspReg != -1)
+		movzx(esp, REG_PTR(rspReg));
 }
 void ChipEmitter::emitCallFunc(uint64_t func, bool stackAligned) 
 {
-#ifdef _WIN32
-	sub(rsp, WIN_SHADOW_SPACE + (stackAligned ? 0 : 8));
-#else
 	if (!stackAligned)
 		sub(rsp, 8);
-#endif
+
 	mov(rax, func);
  	call(rax);
-#ifdef _WIN32
-	add(rsp, WIN_SHADOW_SPACE + (stackAligned ? 0 : 8));
-#else
-	if (!stackAligned)
-		add(rsp, 8);
-#endif
 }
 
 void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
@@ -262,7 +281,7 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 		if (endImmediately)
 			emitEpilogue(pc); // exiting the current block, because self-modifying code could modify it.
 		else
-			mov(al, 1); // smc flag
+			mov(eax, 1); // smc flag
 
 		L(noSmc);
 	};
@@ -305,7 +324,6 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 
 void ChipEmitter::emitIllegalOPHandler()
 {
-	//int3();
 	const bool stackAligned { emitPushAllocRegs() };
 	mov(ARG1, reinterpret_cast<uint64_t>(&core));
 	emitCallFunc(addr(&ChipJITCore::illegalOpcodeHandler), stackAligned);
@@ -359,23 +377,16 @@ void ChipEmitter::emitEpilogue(uint16_t pc)
 
 	emitStoreAllocRegs();
 
-	add(INSTR_COUNT, instructions - branchedInstrs);
+	movzx(eax, EXECUTE_FLAG_PTR);
 
 	if (pc != static_cast<uint16_t>(-1))
 		mov(PC_32, pc);
 
-	cmp(EXECUTE_FLAG_PTR, 0);
+	add(INSTR_COUNT, instructions - branchedInstrs);
 
-	if (AMD_CPU)
-	{
-		jnz(dispatcher);
-		jmp(dispatcherEnd);
-	}
-	else
-	{
-		jz(dispatcherEnd);
-		jmp(BLOCK_PTR);
-	}
+	test(al, al);
+	jz(dispatcherEnd);
+	jmp(BLOCK_PTR);
 }
 
 uint8_t* ChipEmitter::emitJumpPlaceholder()
@@ -431,20 +442,10 @@ void ChipEmitter::emit00E0()
 
 void ChipEmitter::emit00EE(bool restorePC)
 {
-	//Xbyak::Label crash, end;
-	//cmp(SP_32, 0);
-	//jz(crash);
-
 	dec(SP_8);
 
 	if (restorePC)
 		movzx(PC_32, STACK_PTR);
-
-	//jmp(end);
-
-	//L(crash);
-	//int3();
-	//L(end);
 }
 
 void ChipEmitter::emit1NNN(uint16_t addr)
@@ -486,7 +487,12 @@ void ChipEmitter::emit9XY0(uint8_t x, uint8_t y, bool incBranches)
 }
 void ChipEmitter::emit3XNN(uint8_t x, uint8_t val, bool incBranches)
 {
-	cmp(V_REG(x), val);
+	const auto i { allocatedRegs[x].ind };
+
+	if (i != NOT_ALLOCATED && val == 0)
+		test(V_REGS_8[i], V_REGS_8[i]);
+	else
+		cmp(V_REG(x), val);
 	// jz
 	db(0x0F);
 	db(0x84);
@@ -497,7 +503,12 @@ void ChipEmitter::emit3XNN(uint8_t x, uint8_t val, bool incBranches)
 }
 void ChipEmitter::emit4XNN(uint8_t x, uint8_t val, bool incBranches)
 {
-	cmp(V_REG(x), val);
+	const auto i { allocatedRegs[x].ind };
+
+	if (i != NOT_ALLOCATED && val == 0)
+		test(V_REGS_8[i], V_REGS_8[i]);
+	else
+		cmp(V_REG(x), val);
 	// jnz
 	db(0x0F);
 	db(0x85);
@@ -509,7 +520,7 @@ void ChipEmitter::emit4XNN(uint8_t x, uint8_t val, bool incBranches)
 
 void ChipEmitter::emitEX9E(uint8_t x, bool incBranches)
 {
-	MOV_VREG_TO_32(ecx, x);
+	movzx(ecx, V_REG(x));
 	and_(ecx, 0xF);
 	movzx(ecx, KEY_PTR(rcx));
 	test(cl, cl);
@@ -523,7 +534,7 @@ void ChipEmitter::emitEX9E(uint8_t x, bool incBranches)
 }
 void ChipEmitter::emitEXA1(uint8_t x, bool incBranches)
 {
-	MOV_VREG_TO_32(ecx, x);
+	movzx(ecx, V_REG(x));
 	and_(ecx, 0xF);
 	movzx(ecx, KEY_PTR(rcx));
 	test(cl, cl);
@@ -564,17 +575,7 @@ void ChipEmitter::emit8XY0(uint8_t x, uint8_t y)
 	if (x == y)
 		return;
 
-	const auto xVal { allocatedRegs[x].ind }, yVal { allocatedRegs[y].ind };
-
-	if (xVal != NOT_ALLOCATED)
-	{
-		if (yVal != NOT_ALLOCATED)
-			mov(V_REGS_32[xVal], V_REGS_32[yVal]);
-		else
-			movzx(V_REGS_32[xVal], REG_PTR(y));
-	}
-	else
-		MOV(V_REG(x), V_REG(y));
+	MOV_TO_REG(x, V_REG(y));
 }
 void ChipEmitter::emit8XY1(uint8_t x, uint8_t y, bool calcFlag)
 {
@@ -663,7 +664,7 @@ void ChipEmitter::emit8XY7(uint8_t x, uint8_t y, bool calcFlag)
 	if (x == 0xF && !calcFlag)
 		return;
 
-	MOV_VREG_TO_32(eax, y);
+	movzx(eax, V_REG(y));
 	sub(al, V_REG(x));
 
 	if (x != 0xF)
@@ -690,7 +691,12 @@ void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
 		if (!quirks.shifting)
 			emit8XY0(x, y);
 
-		shl(V_REG(x), 1);
+		const auto i { allocatedRegs[x].ind };
+
+		if (i != NOT_ALLOCATED)
+			add(V_REGS_8[i], V_REGS_8[i]); // is slightly faster than shift
+		else
+			shl(REG_PTR(x), 1);
 
 		if (calcFlag)
 			setc(FLAG_REG);
@@ -729,10 +735,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 	Xbyak::Label drawEnd, drawUnknownRem;
 
-	const auto xVal { allocatedRegs[x].ind };
 	const bool wideDraw { n >= 2 };
-	const auto xReg { xVal == NOT_ALLOCATED || wideDraw || !quirks.clipping || (!BMI2 || !AMD_CPU) ? rcx : V_REGS_64[xVal] };
-
 	int i { 0 }, cnt { n };
 	bool loadedInitialVals { false };
 
@@ -741,10 +744,8 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 		if (loadedInitialVals)
 			return;
 
-		MOV_VREG_TO_32(eax, y);
-
-		if (xReg == rcx)
-			MOV_VREG_TO_32(ecx, x);
+		movzx(eax, V_REG(y));
+		movzx(ecx, V_REG(x));
 
 		if (calcFlag)
 			xor_(FLAG_REG_32, FLAG_REG_32);
@@ -979,7 +980,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 		if (quirks.clipping)
 		{
 			if (BMI2 && AMD_CPU) // shrx has 3 cycle latency on modern intel cores, but on amd it's faster than shr.
-				shrx(rdx, rdx, xReg);
+				shrx(rdx, rdx, rcx);
 			else
 				shr(rdx, cl);
 		}
@@ -1034,15 +1035,15 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 void ChipEmitter::emitFX07(uint8_t x)
 {
-	MOV(V_REG(x), byte[BASE + offsetof(ChipState, delayTimer)]);
+	MOV_TO_REG(x, DELAY_PTR);
 }
 void ChipEmitter::emitFX15(uint8_t x)
 {
-	MOV(byte[BASE + offsetof(ChipState, delayTimer)], V_REG(x));
+	MOV(DELAY_PTR, V_REG(x));
 }
 void ChipEmitter::emitFX18(uint8_t x)
 {
-	MOV(byte[BASE + offsetof(ChipState, soundTimer)], V_REG(x));
+	MOV(SOUND_PTR, V_REG(x));
 }
 
 void ChipEmitter::emitFX1E(uint8_t x)
@@ -1054,7 +1055,7 @@ void ChipEmitter::emitFX1E(uint8_t x)
 
 void ChipEmitter::emitFX29(uint8_t x)
 {
-	MOV_VREG_TO_32(eax, x);
+	movzx(eax, V_REG(x));
 	and_(eax, 0xF);
  	lea(I_REG_32, ptr[rax + rax * 4]);
 }
@@ -1190,7 +1191,7 @@ void ChipEmitter::emitRegCopy(int cnt)
 		if constexpr (toMem)
 			MOV(RAM_PTR(i), V_REG(i));
 		else
-			MOV(V_REG(i), RAM_PTR(i));
+			MOV_TO_REG(i, RAM_PTR(i));
 
 		i++;
 		cnt--;
@@ -1234,25 +1235,25 @@ void ChipEmitter::emitFX65(uint8_t x)
 void ChipEmitter::emitFX0A(uint8_t x, uint16_t pc)
 {
 	Xbyak::Label firstCall, end;
-	const auto val { allocatedRegs[x].ind };
+	const auto i { allocatedRegs[x].ind };
 
 	mov(PC_32, pc - 2);
-	cmp(byte[BASE + offsetof(ChipState, firstFX0ACall)], 0);
+	cmp(FX0A_FLAG_PTR, 0);
 	jnz(firstCall);
 
-	cmp(byte[BASE + offsetof(ChipState, inputReg)], -1);
+	cmp(FX0A_REG_PTR, -1);
 	jnz(end);
 
-	if (val != NOT_ALLOCATED)
-		movzx(V_REGS_32[val], REG_PTR(x));
+	if (i != NOT_ALLOCATED)
+		movzx(V_REGS_32[i], REG_PTR(x));
 
-	mov(byte[BASE + offsetof(ChipState, firstFX0ACall)], 1);
+	mov(FX0A_FLAG_PTR, 1);
 	mov(PC_32, pc);
 	jmp(end);
 
 	L(firstCall);
-	mov(byte[BASE + offsetof(ChipState, inputReg)], x);
-	mov(byte[BASE + offsetof(ChipState, firstFX0ACall)], 0);
+	mov(FX0A_REG_PTR, x);
+	mov(FX0A_FLAG_PTR, 0);
 
 	L(end);
 }

@@ -221,7 +221,7 @@ private:
 
 	bool subRequiresRuntimeStack(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
 	{
-		// return true;
+		//return true;
 		bool branch { false };
 		const uint16_t startNNN { nnn };
 		
@@ -657,7 +657,7 @@ private:
 	{
 		const uint16_t startPC { pc };
 		bool flow { false };
-		uint8_t* branchEndPtr { nullptr }, *newBranchEndPtr { nullptr };
+		uint8_t *branchEndPtr { nullptr }, *newBranchEndPtr { nullptr };
 
 		const auto popFlagCalc = [&]() -> bool
 		{
@@ -963,8 +963,6 @@ private:
 
 		c.emitEpilogue(flow ? -1 : pc & 0xFFF);
 		return pc;
-
-#undef BRANCH
 	}
 
 	void invalidateBlocks(uint64_t ind, uint64_t mask)

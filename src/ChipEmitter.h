@@ -23,7 +23,7 @@ class ChipEmitter : Xbyak::CodeGenerator
 {
 public:
 	static constexpr size_t MAX_CACHE_SIZE { 1048576 };
-	static constexpr int MAX_ALLOC_REGS { 5 };//{ 6 };
+	static constexpr int MAX_ALLOC_REGS { 7 };
 	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
 
 private:
@@ -42,24 +42,26 @@ private:
 		AMD_CPU = cpuCaps.has(Xbyak::util::Cpu::tAMD);
 	}
 	
-	uint8_t* uncompiledBlockHandlerPtr;
-	uint8_t* dispatcherPtr;
+	uint8_t *uncompiledBlockHandlerPtr, *dispatcherPtr;
 	uint64_t codeStartIndex;
 
 	int32_t executeFlagBaseOffset, JITMapBaseOffset;
-	Xbyak::Label dispatcher, dispatcherEnd;
+	Xbyak::Label dispatcherEnd, rspBackup;
 
-	std::array<Xbyak::Reg8, MAX_ALLOC_REGS + 1> V_REGS_8 { sil, dil, r9b, r10b, r11b, r15b };
-	std::array<Xbyak::Reg32, MAX_ALLOC_REGS + 1> V_REGS_32 { esi, edi, r9d, r10d, r11d, r15d };
-	std::array<Xbyak::Reg64, MAX_ALLOC_REGS + 1> V_REGS_64 { rsi, rdi, r9, r10, r11, r15 };
+	static constexpr int RSP_ALLOC_IND { 5 };
+	int rspReg { -1 };
+
+	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { sil, dil, r9b, r10b, r11b, spl, r15b };
+	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { esi, edi, r9d, r10d, r11d, esp, r15d };
+	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rsi, rdi, r9, r10, r11, rsp, r15 };
 
 #ifdef _WIN32
-	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false };
+	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false, false };
 #else
-	static constexpr std::array CALLER_SAVED_V_REGS { true, true, true, true, true, false };
+	static constexpr std::array CALLER_SAVED_V_REGS { true, true, true, true, true, false, false };
 #endif
 
-	void MOV_VREG_TO_32(Xbyak::Reg32 dst, uint8_t reg);
+	void MOV_TO_REG(uint8_t r, const Xbyak::Operand& op);
 
 	template <typename Op>
 	void PerformOp(const Xbyak::Operand& op1, const Xbyak::Operand& op2, Op op)
