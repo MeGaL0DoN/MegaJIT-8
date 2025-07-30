@@ -12,9 +12,9 @@
 
 struct RegAllocation
 {
-	uint8_t ind;
-	bool needsLoad;
-	bool needsStore;
+	uint8_t ind{};
+	bool needsLoad{};
+	bool needsStore{};
 };
 
 class ChipJITCore;

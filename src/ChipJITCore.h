@@ -517,7 +517,26 @@ private:
 				}
 				break;
 			case 0x5000:
+				if (x == y) // always skips
+				{
+					pc += 2;
+					break;
+				}
+
+				alloc->regWeights[x] += 2;
+				alloc->regWeights[y]++;
+				setInitialValUseReg(x);
+				setInitialValUseReg(y);
+
+				if (x == 0xF || y == 0xF)
+					setFlagOpCalcVal(true);
+
+				branch = true;
+				continue;
 			case 0x9000:
+				if (x == y) // never skips
+					break;
+
 				alloc->regWeights[x] += 2;
 				alloc->regWeights[y]++;
 				setInitialValUseReg(x);
@@ -823,7 +842,10 @@ private:
 				branch([&](bool inc) { c.emit4XNN(x, nn, inc); });
 				break;
 			case 0x5000:
-				branch([&](bool inc) { c.emit5XY0(x, y, inc); });
+				if (x != y)
+					branch([&](bool inc) { c.emit5XY0(x, y, inc); });
+				else
+					pc += 2; // don't emit anything if x == y (always skips)
 				break;
 			case 0x6000:
 				c.emit6XNN(x, nn);
@@ -869,7 +891,8 @@ private:
 			case 0x9000:
 				if (n == 0x0)
 				{
-					branch([&](bool inc) { c.emit9XY0(x, y, inc); });
+					if (x != y) // don't emit anything if x == y (never skips)
+						branch([&](bool inc) { c.emit9XY0(x, y, inc); });
 					break;
 				}
 				c.emitIllegalOPHandler();

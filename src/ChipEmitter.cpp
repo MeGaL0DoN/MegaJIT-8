@@ -162,7 +162,7 @@ void ChipEmitter::MOV_TO_REG(uint8_t r, const Xbyak::Operand& op)
 
 void ChipEmitter::emitLoadAllocRegs()
 {
-	for (int i = 0; i < 15; i++) // 16
+	for (int i = 0; i < 16; i++)
 	{
 		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsLoad)
 			movzx(V_REGS_32[allocatedRegs[i].ind], REG_PTR(i));
@@ -170,7 +170,7 @@ void ChipEmitter::emitLoadAllocRegs()
 }
 void ChipEmitter::emitStoreAllocRegs()
 {
-	for (int i = 0; i < 15; i++) // 16
+	for (int i = 0; i < 16; i++)
 	{
 		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsStore)
 			mov(REG_PTR(i), V_REGS_8[allocatedRegs[i].ind]);
