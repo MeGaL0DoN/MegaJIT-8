@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <atomic>
 #include "ChipState.h"
 
 class ChipCore
@@ -12,7 +13,7 @@ public:
 	static void initAudio();
 	static void setVolume(double val);
 
-	explicit ChipCore(ChipState& s) : s(s)
+	explicit ChipCore(ChipState& s, std::atomic<bool>& executeFlag) : s(s), executeFlag(executeFlag)
 	{}
 
 	virtual ~ChipCore() = default;
@@ -62,6 +63,7 @@ public:
 
 protected:
 	ChipState& s;
+	std::atomic<bool>& executeFlag;
 
 	virtual void initialize()
 	{

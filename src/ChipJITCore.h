@@ -1,13 +1,13 @@
 #pragma once
 
 #include <fstream>
+#include <cassert>
 #include <random>
 #include <array>
 #include <vector>
 #include <ranges>
 #include <utility>
 #include <filesystem>
-#include <algorithm>
 #include <queue>
 #include <bitset>
 
@@ -16,14 +16,14 @@
 #include "ChipCore.h"
 #include "ChipEmitter.h"
 #include "ChipJITState.h"
-#include "macros.h"
+#include "utils.h"
 
 class ChipJITCore : public ChipCore
 {
 public:
 	friend ChipEmitter;
 
-	ChipJITCore(ChipState& s, std::atomic<bool>& executeFlag) : ChipCore(s), c(*this, executeFlag)
+	ChipJITCore(ChipState& s, std::atomic<bool>& executeFlag) : ChipCore(s, executeFlag), c(*this, executeFlag)
 	{}
 
 	FORCE_INLINE uint64_t execute() override
@@ -34,8 +34,8 @@ public:
 	void clearJITCache()
 	{
 		JIT.blocks.clear();
-		std::fill_n(JIT.blockMap.begin(), ChipState::RAM_SIZE, c.getUncompiledPtr());
-		std::memset(JIT.compiledRam.data(), 0, sizeof(ChipJITState::compiledRam));
+		std::fill_n(JIT.blockMap.begin(), JIT.blockMap.size(), c.getUncompiledPtr());
+		std::fill_n(JIT.compiledRam.begin(), JIT.compiledRam.size(), 0);
 		c.clearCache();
 	}
 
@@ -47,12 +47,12 @@ public:
 
 	void dumpCode(const std::filesystem::path& path) const
 	{
-		std::ofstream outFile { path, std::ios::out };
+		std::ofstream outFile{ path, std::ios::out };
 		if (!outFile) return;
 
 		static ZydisDecoder decoder;
 		static ZydisFormatter formatter;
-		static bool decoderInitialized { false }, formatterInitialized { false };
+		static bool decoderInitialized{ false }, formatterInitialized{ false };
 
 		if (!decoderInitialized)
 		{
@@ -63,17 +63,18 @@ public:
 		{
 			ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
 			ZydisFormatterSetProperty(&formatter, ZYDIS_FORMATTER_PROP_ADDR_PADDING_ABSOLUTE, ZYDIS_PADDING_DISABLED);
+			ZydisFormatterSetProperty(&formatter, ZYDIS_FORMATTER_PROP_FORCE_RELATIVE_RIPREL, static_cast<ZyanUPointer>(ZYAN_TRUE));
 			formatterInitialized = true;
 		}
 
-		bool firstBlock { true };
-		ZyanU64 runtimeAddress { 0 };
+		bool firstBlock{ true };
+		ZyanU64 runtimeAddress{ 0 };
 
 		for (const auto& block : JIT.blocks)
 		{
-			const auto buf { JIT.blockMap[block.pc] };
+			const auto ptr { JIT.blockMap[block.pc] };
 
-			if (buf == c.getUncompiledPtr())
+			if (ptr == c.getUncompiledPtr())
 				continue;
 
 			if (!firstBlock)
@@ -82,13 +83,13 @@ public:
 			firstBlock = false;
 
 			outFile << "Block at PC: " << std::hex << "0x" << block.pc// << "-0x" << block.pcRanges.back().second
-					<< "\n-----------------------------------------";
+				<< "\n-----------------------------------------";
 
-			ZyanUSize offset { 0 };
+			ZyanUSize offset{ 0 };
 			ZydisDecodedInstruction instruction;
 			ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
 
-			while (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf + offset, block.cacheSize - offset, &instruction, operands)))
+			while (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, ptr + offset, block.cacheSize - offset, &instruction, operands)))
 			{
 				char textBuffer[256];
 				ZydisFormatterFormatInstruction(&formatter, &instruction, operands, instruction.operand_count_visible, textBuffer, sizeof(textBuffer), runtimeAddress, nullptr);
@@ -112,35 +113,20 @@ private:
 	};
 	struct SubroutineInfo
 	{
-		bool conditional { false };
-		bool requiresRuntimeStack { false };
-		uint16_t startInstrCount { 0 };
-		uint16_t startBranchCount { 0 };
+		bool conditional{ false };
+		bool requiresRuntimeStack{ false };
+		uint16_t startInstrCount{ 0 };
+		uint16_t startBranchCount{ 0 };
 		std::vector<RetPoint> condRetPoints{};
 	};
-	struct RegAllocFrameInfo
-	{
-		std::array<uint16_t, 16> regWeights{};
-		std::bitset<16> modifiedRegs{};
-		std::bitset<16> initialValUseRegs{};
-		std::vector<RegAllocFrameInfo> childFrames{};
-		bool conditionalFrame;
 
-		std::array<RegAllocation, 16> allocation{};
-
-		explicit RegAllocFrameInfo(bool cond) : conditionalFrame(cond)
-		{}
-	};
-
-	JITBlock* block { nullptr };
+	JITBlock* block{ nullptr };
 
 	std::queue<bool> blockFlagCalcList{};
-	uint16_t flagOps { 0 };
+	uint16_t flagOps{ 0 };
 
-	std::vector<RegAllocFrameInfo> allocFrames{};
-
-	static constexpr size_t BLOCK_MAX_INSTR { 256 };
-	size_t instructionsPerBlock { BLOCK_MAX_INSTR };
+	static constexpr size_t BLOCK_MAX_INSTR{ 256 };
+	size_t instructionsPerBlock{ BLOCK_MAX_INSTR };
 
 	void initialize() override
 	{
@@ -150,7 +136,7 @@ private:
 
 	uint8_t* compileBlock(uint16_t pc)
 	{
-		constexpr size_t CACHE_CLEAR_THRESHOLD { static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.5) };
+		constexpr size_t CACHE_CLEAR_THRESHOLD{ static_cast<size_t>(ChipEmitter::MAX_CACHE_SIZE * 0.5) };
 
 		if (c.getCodeSize() >= CACHE_CLEAR_THRESHOLD) [[unlikely]]
 			clearJITCache();
@@ -170,61 +156,29 @@ private:
 			block = &JIT.blocks.emplace_back(pc);
 
 		blockFlagCalcList = {};
-		allocFrames.clear();
-
-		const auto func { c.getCodeEndPtr() };
-		JIT.blockMap[pc] = func;
-
+		
+		const auto ptr { c.newBlock() };
+		JIT.blockMap[pc] = ptr;
+	
 		c.newBlock();
-		auto& frame { allocFrames.emplace_back(false) };
-		analyzeBlock(pc, &frame, allocFrames);
-		allocateRegisters(allocFrames);
+		analyzeBlock(pc);
+		c.allocateRegs();
+		c.emitPrologue();
 
 		c.instructions = 0;
-		//c.allocatedRegs = allocFrames.front().allocation;
-		c.emitLoadAllocRegs();
-		emitBlock(pc, allocFrames.data() + 1);
-
-		block->cacheSize = static_cast<uint32_t>(c.getCodeEndPtr() - func);
+		emitBlock(pc);
+		block->cacheSize = static_cast<uint32_t>(c.getCodeEndPtr() - ptr);
 		block = nullptr;
 
-		return func;
-	}
-
-	void allocateRegisters(std::vector<RegAllocFrameInfo>& frames) // TODO
-	{
-		constexpr int ALLOC_THRESHOLD { 2 };
-		std::array<std::pair<uint8_t, uint16_t>, 16> usageMap{};
-
-		for (auto& alloc : frames)
-		{
-			int cnt { 0 };
-
-			for (int i = 0; i < 15; i++) // 16
-			{
-				if (alloc.regWeights[i] >= ALLOC_THRESHOLD)
-					usageMap[cnt++] = { i, alloc.regWeights[i] };
-			}
-
-			std::ranges::fill(alloc.allocation, RegAllocation{ ChipEmitter::NOT_ALLOCATED });
-			std::sort(usageMap.begin(), usageMap.begin() + cnt, [](const auto& a, const auto& b) { return a.second > b.second; });
-
-			for (int i = 0; i < cnt && i < ChipEmitter::MAX_ALLOC_REGS; i++)
-			{
-				const auto reg { usageMap[i].first };
-				alloc.allocation[reg] = RegAllocation{ static_cast<uint8_t>(i), alloc.initialValUseRegs[reg], alloc.modifiedRegs[reg] };
-			}
-
-			allocateRegisters(alloc.childFrames);
-		}
+		return ptr;// c.getCodePtr() + offset;
 	}
 
 	bool subRequiresRuntimeStack(uint16_t startPC, uint16_t pc, uint16_t nnn, uint16_t instrs) const
 	{
 		//return true;
-		bool branch { false };
-		const uint16_t startNNN { nnn };
-		
+		bool branch{ false };
+		const uint16_t startNNN{ nnn };
+
 		while ((instrs < instructionsPerBlock || branch) && nnn < 0xFFF)
 		{
 			instrs++;
@@ -239,7 +193,7 @@ private:
 				{
 				case 0x00EE:
 					if (branch)
-					 	break;
+						break;
 					return false;
 				default:
 					break;
@@ -272,18 +226,18 @@ private:
 			case 0xF000:
 				switch (opcode & 0xFF)
 				{
-					case 0x000A:
-					case 0x0033:
-					case 0x0055:
-						return true;
-					default:
-						break;
+				case 0x000A:
+				case 0x0033:
+				case 0x0055:
+					return true;
+				default:
+					break;
 				}
 				break;
 			default:
 				break;
 			}
-			
+
 			branch = false;
 		}
 
@@ -296,16 +250,16 @@ private:
 
 		switch (opcode & 0xF000)
 		{
-			case 0x0000:
-				return opcode == 0x00EE;
-			case 0x1000:
-			case 0x2000:
-			case 0xB000:
-				return true;
-			case 0xF000:
-				return (opcode & 0xFF) == 0x0A;
-			default:
-				return false;
+		case 0x0000:
+			return opcode == 0x00EE;
+		case 0x1000:
+		case 0x2000:
+		case 0xB000:
+			return true;
+		case 0xF000:
+			return (opcode & 0xFF) == 0x0A;
+		default:
+			return false;
 		}
 	}
 	bool isInlinableFlow(uint16_t startPC, uint16_t pc, uint16_t nnn) const
@@ -313,7 +267,7 @@ private:
 		return (nnn < startPC || nnn >= pc) && c.instructions < instructionsPerBlock;
 	}
 
-	uint16_t analyzeBlock(uint16_t pc, RegAllocFrameInfo* alloc, std::vector<RegAllocFrameInfo>& allocFrames)
+	uint16_t analyzeBlock(uint16_t pc)
 	{
 		const uint16_t startPC { pc };
 		bool branch { false }, flow { false };
@@ -325,7 +279,7 @@ private:
 				blockFlagCalcList.push(true);
 				flagOps--;
 			}
-		};		 
+		};
 		const auto setFlagOpCalcVal = [&](bool val)
 		{
 			if (!val)
@@ -333,7 +287,7 @@ private:
 				if (branch)
 					return;
 
-				alloc->regWeights[0xF] -= flagOps;
+				c.VRegWeight[0xF] -= flagOps;
 
 				while (flagOps > 0)
 				{
@@ -352,15 +306,10 @@ private:
 			else
 				flow = true;
 		};
-
 		const auto setInitialValUseReg = [&](uint8_t r)
 		{
-			if (!alloc->modifiedRegs[r])
-				alloc->initialValUseRegs[r] = true;
-		};
-		const auto newRegAllocFrame = [&]()
-		{
-			alloc = &allocFrames.emplace_back(false);
+			if (!c.modifiedVRegs[r])
+				c.initialValUseVRegs[r] = true;
 		};
 
 		while ((c.instructions < instructionsPerBlock || branch) && pc < 0xFFF)
@@ -385,31 +334,21 @@ private:
 				if (isInlinableFlow(startPC, pc, nnn))
 				{
 					if (!branch)
-					{
-						auto& frame { allocFrames.emplace_back(false) };
-						return analyzeBlock(nnn, &frame, allocFrames);
-					}
+						return analyzeBlock(nnn);
 
-					calculateAllFlags();
-					auto& frame { allocFrames.emplace_back(true) };
-					analyzeBlock(nnn, &frame, allocFrames);
+					calculateAllFlags();;
+					analyzeBlock(nnn);
 				}
 				else
 					handleFlow();
 				break;
 			case 0x2000:
-				if (isInlinableFlow(startPC, pc, nnn))
+				if (isInlinableFlow(startPC, pc, nnn) && !subRequiresRuntimeStack(startPC, pc, nnn, c.instructions))
 				{
 					if (branch)
-					{
 						calculateAllFlags();
-						allocFrames.emplace_back(true);
-					}
-					else
-						allocFrames.emplace_back(false);
 
-					analyzeBlock(nnn, &allocFrames.back(), allocFrames.back().childFrames);
-					newRegAllocFrame();
+					analyzeBlock(nnn);
 				}
 				else
 					handleFlow();
@@ -418,7 +357,7 @@ private:
 			case 0x3000:
 			case 0x4000:
 			case 0xE000:
-				alloc->regWeights[x]++;
+				c.VRegWeight[x]++;
 				setInitialValUseReg(x);
 
 				if (x == 0xF)
@@ -428,8 +367,8 @@ private:
 				continue;
 			case 0x6000:
 			case 0xC000:
-				alloc->regWeights[x]++;
-				alloc->modifiedRegs[x] = true;
+				c.VRegWeight[x]++;
+				c.modifiedVRegs[x] = true;
 
 				if (x == 0xF)
 					setFlagOpCalcVal(false);
@@ -438,9 +377,9 @@ private:
 				if (nn == 0)
 					break;
 
-				alloc->regWeights[x]++;
+				c.VRegWeight[x]++;
 				setInitialValUseReg(x);
-				alloc->modifiedRegs[x] = true;
+				c.modifiedVRegs[x] = true;
 				break;
 			case 0x8000:
 				switch (n)
@@ -449,10 +388,10 @@ private:
 					if (x == y)
 						break;
 
-					alloc->regWeights[x] += 2;
-					alloc->regWeights[y]++;
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;
 					setInitialValUseReg(y);
-					alloc->modifiedRegs[x] = true;
+					c.modifiedVRegs[x] = true;
 
 					if (y == 0xF)
 						setFlagOpCalcVal(true);
@@ -460,11 +399,11 @@ private:
 				case 0x1:
 				case 0x2:
 				case 0x3:
-					alloc->regWeights[x] += 2;
-					alloc->regWeights[y]++;;
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;;
 					setInitialValUseReg(x);
 					setInitialValUseReg(y);
-					alloc->modifiedRegs[x] = true;
+					c.modifiedVRegs[x] = true;
 
 					if (y == 0xF && x != 0xF)
 						setFlagOpCalcVal(true);
@@ -473,35 +412,35 @@ private:
 
 					if (s.quirks.vfReset)
 					{
-						alloc->regWeights[0xF]++;
-						alloc->modifiedRegs[0xF] = true;
+						c.VRegWeight[0xF]++;
+						c.modifiedVRegs[0xF] = true;
 						flagOps++;
 					}
 					break;
 				case 0x4:
 				case 0x5:
 				case 0x7:
-					alloc->regWeights[x] += 2;
-					alloc->regWeights[y]++;
-					alloc->regWeights[0xF]++;
+					c.VRegWeight[x] += 2;
+					c.VRegWeight[y]++;
+					c.VRegWeight[0xF]++;
 					setInitialValUseReg(x);
 					setInitialValUseReg(y);
-					alloc->modifiedRegs[x] = true;
-					alloc->modifiedRegs[0xF] = true;
+					c.modifiedVRegs[x] = true;
+					c.modifiedVRegs[0xF] = true;
 
 					setFlagOpCalcVal(y == 0xF && x != 0xF);
 					flagOps++;
 					break;
 				case 0x0006:
 				case 0x000E:
-					alloc->regWeights[x]++;
-					alloc->regWeights[0xF]++;
+					c.VRegWeight[x]++;
+					c.VRegWeight[0xF]++;
 
 					if (!s.quirks.shifting && x != y)
 					{
 						setInitialValUseReg(y);
-						alloc->regWeights[x]++;
-						alloc->regWeights[y]++;
+						c.VRegWeight[x]++;
+						c.VRegWeight[y]++;
 						setFlagOpCalcVal(y == 0xF);
 					}
 					else
@@ -510,8 +449,8 @@ private:
 						setFlagOpCalcVal(false);
 					}
 
-					alloc->modifiedRegs[x] = true;
-					alloc->modifiedRegs[0xF] = true;
+					c.modifiedVRegs[x] = true;
+					c.modifiedVRegs[0xF] = true;
 					flagOps++;
 					break;
 				}
@@ -523,8 +462,8 @@ private:
 					break;
 				}
 
-				alloc->regWeights[x] += 2;
-				alloc->regWeights[y]++;
+				c.VRegWeight[x] += 2;
+				c.VRegWeight[y]++;
 				setInitialValUseReg(x);
 				setInitialValUseReg(y);
 
@@ -537,8 +476,8 @@ private:
 				if (x == y) // never skips
 					break;
 
-				alloc->regWeights[x] += 2;
-				alloc->regWeights[y]++;
+				c.VRegWeight[x] += 2;
+				c.VRegWeight[y]++;
 				setInitialValUseReg(x);
 				setInitialValUseReg(y);
 
@@ -552,18 +491,18 @@ private:
 			case 0xB000:
 			{
 				const auto reg { s.quirks.jumping ? x : 0 };
-				alloc->regWeights[reg]++;
+				c.VRegWeight[reg]++;
 				setInitialValUseReg(reg);
 				handleFlow();
 				break;
 			}
 			case 0xD000:
-				alloc->regWeights[x]++;
-				alloc->regWeights[y]++;
-				alloc->regWeights[0xF]++;
+				c.VRegWeight[x]++;
+				c.VRegWeight[y]++;
+				c.VRegWeight[0xF]++;
 				setInitialValUseReg(x);
 				setInitialValUseReg(y);
-				alloc->modifiedRegs[0xF] = true;
+				c.modifiedVRegs[0xF] = true;
 
 				setFlagOpCalcVal(x == 0xF || y == 0xF);
 				flagOps++;
@@ -572,15 +511,15 @@ private:
 				switch (nn)
 				{
 				case 0x07:
-					alloc->regWeights[x]++;
-					alloc->modifiedRegs[x] = true;
+					c.VRegWeight[x]++;
+					c.modifiedVRegs[x] = true;
 
 					if (x == 0xF)
 						setFlagOpCalcVal(false);
 					break;
 				case 0x15:
 				case 0x18:
-					alloc->regWeights[x]++;
+					c.VRegWeight[x]++;
 					setInitialValUseReg(x);
 
 					if (x == 0xF)
@@ -591,7 +530,7 @@ private:
 					break;
 				case 0x1E:
 				case 0x29:
-					alloc->regWeights[x]++;
+					c.VRegWeight[x]++;
 					setInitialValUseReg(x);
 
 					if (x == 0xF)
@@ -599,32 +538,29 @@ private:
 
 					break;
 				case 0x33:
-					alloc->regWeights[x]++;
+					c.VRegWeight[x]++;
 					setInitialValUseReg(x);
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 
-					// new reg allocation on mem stores
-					newRegAllocFrame();
 					break;
 				case 0x55:
 					for (int i = 0; i <= x; i++)
 					{
-						alloc->regWeights[i]++;
+						c.VRegWeight[i]++;
 						setInitialValUseReg(i);
 					}
 
 					if (x == 0xF)
 						setFlagOpCalcVal(true);
 
-					newRegAllocFrame();
 					break;
 				case 0x65:
 					for (int i = 0; i <= x; i++)
 					{
-						alloc->regWeights[i]++;
-						alloc->modifiedRegs[i] = true;
+						c.VRegWeight[i]++;
+						c.modifiedVRegs[i] = true;
 					}
 
 					if (x == 0xF)
@@ -637,7 +573,7 @@ private:
 
 			if (flow)
 				break;
-	
+
 			branch = false;
 		}
 
@@ -645,51 +581,17 @@ private:
 		return pc;
 	}
 
-	// 	: main
-	// loop
-	//  v0 := 0
-	//  if v0 == 0 then
-	//   test
-	//  v0 += 3
-	// again
-	//
-	// : test
-	// if v1 == 0 begin
-	// 	v1 += 2
-	// 	v1 -= 5
-	// 	v1 -= 7
-	// end
-	// if v1 == 1 then
-	// 	return
-	// if v1 == 2 begin
-	// 	vf += 200
-	// 	vf += 200
-	// 	vf += 200
-	// 	vf += 200
-	// 	vf += 200
-	// 	vf += 200
-	// 	return
-	// end
-	// return
-
-	uint16_t emitBlock(uint16_t pc, RegAllocFrameInfo* alloc, SubroutineInfo* sub = nullptr, bool conditionalBlock = false)
+	uint16_t emitBlock(uint16_t pc, SubroutineInfo* sub = nullptr, bool conditionalBlock = false)
 	{
-		const uint16_t startPC { pc };
-		bool flow { false };
-		uint8_t *branchEndPtr { nullptr }, *newBranchEndPtr { nullptr };
+		const uint16_t startPC{ pc };
+		bool flow{ false };
+		uint8_t* branchEndPtr{ nullptr }, * newBranchEndPtr{ nullptr };
 
 		const auto popFlagCalc = [&]() -> bool
 		{
-			const bool val { blockFlagCalcList.front() };
+			const bool val{ blockFlagCalcList.front() };
 			blockFlagCalcList.pop();
 			return val;
-		};
-		const auto newRegAllocFrame = [&]()
-		{
-			c.emitStoreAllocRegs();
-			//alloc++;
-			//c.allocatedRegs = alloc++->allocation;
-			c.emitLoadAllocRegs();
 		};
 		const auto branch = [&](auto emitFunc)
 		{
@@ -703,12 +605,12 @@ private:
 
 			newBranchEndPtr = c.getCodeEndPtr();
 		};
- 
+
 		while ((c.instructions < instructionsPerBlock || branchEndPtr) && pc < 0xFFF)
 		{
-			const uint16_t prevInstrCount { c.instructions }, prevBranchCount { c.branchedInstrs };
+			const uint16_t prevInstrCount{ c.instructions }, prevBranchCount{ c.branchedInstrs };
 			c.instructions++;
-			bool inlinedBlock { false };
+			bool inlinedBlock{ false };
 
 			JIT.compiledRam[pc >> 6] |= (1ull << (pc & 63));
 			block->compiledRam[pc >> 6] |= (1ull << (pc & 63));
@@ -770,19 +672,13 @@ private:
 				{
 					if (branchEndPtr)
 					{
-						const auto prevAllocRegs { c.allocatedRegs };
-						newRegAllocFrame();
-						emitBlock(nnn, alloc, sub, true);
-						c.allocatedRegs = prevAllocRegs;
+						emitBlock(nnn, sub, true);
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-					{
-						newRegAllocFrame();
-						return emitBlock(nnn, alloc, sub, conditionalBlock);
-					}
+						return emitBlock(nnn, sub, conditionalBlock);
 				}
 				else
 				{
@@ -791,11 +687,8 @@ private:
 				}
 				break;
 			case 0x2000:
-				if (isInlinableFlow(startPC, pc, nnn))
+				if (isInlinableFlow(startPC, pc, nnn) && !subRequiresRuntimeStack(startPC, pc, nnn, c.instructions))
 				{
-					//const auto childFrames { alloc->childFrames.data() };
-					newRegAllocFrame();
-
 					SubroutineInfo newSub
 					{
 						branchEndPtr != nullptr, subRequiresRuntimeStack(startPC, pc, nnn, c.instructions),
@@ -807,15 +700,13 @@ private:
 
 					if (branchEndPtr)
 					{
-						emitBlock(nnn, /*childFrames*/nullptr, &newSub);
+						emitBlock(nnn, &newSub);
 						c.branchedInstrs -= (c.branchedInstrs - prevBranchCount);
 						c.branchedInstrs += (c.instructions - prevInstrCount);
 						inlinedBlock = true;
 					}
 					else
-						emitBlock(nnn, /*childFrames*/nullptr, &newSub);
-
-					newRegAllocFrame();
+						emitBlock(nnn, &newSub);
 
 					for (const auto& p : newSub.condRetPoints)
 					{
@@ -825,7 +716,7 @@ private:
 						{
 							const int32_t skippedInstrs = (c.instructions - p.instrCount) - (c.branchedInstrs - p.branchCount);
 							// jmp opcode is 1 byte (0x9E) + 4 bytes jump displacement
-							c.patchImm32(p.codePtr - sizeof(int32_t) - 1, -skippedInstrs); 
+							c.patchImm32(p.codePtr - sizeof(int32_t) - 1, -skippedInstrs);
 						}
 					}
 				}
@@ -948,14 +839,12 @@ private:
 					break;
 				case 0x33:
 					c.emitFX33(x, pc);
-					newRegAllocFrame();
 					break;
 				case 0x55:
 					c.emitFX55(x, pc);
-					newRegAllocFrame();
 					break;
 				case 0x65:
-					c.emitFX65(x); 
+					c.emitFX65(x);
 					break;
 				default:
 					c.emitIllegalOPHandler();
@@ -995,7 +884,7 @@ private:
 		for (const auto& block : JIT.blocks)
 		{
 			if (block.compiledRam[ind] & mask)
-				JIT.blockMap[block.pc] = c.getUncompiledPtr();
+				JIT.blockMap[block.pc] = 0;
 		}
 	}
 

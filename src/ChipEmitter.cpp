@@ -1,5 +1,6 @@
 #include "ChipEmitter.h"
 #include "ChipJITCore.h"
+#include "utils.h"
 
 #ifdef _WIN32
 #define ARG1 rcx
@@ -14,18 +15,19 @@
 #endif
 
 #define BASE rbp
+#define CORE_PTR ptr[BASE + offset(&core.s, &core)]
 #define INSTR_COUNT r12
-#define I_REG_64 rbx
-#define I_REG_32 ebx
-#define I_REG_16 bx
 #define PC_64 r13
 #define PC_32 r13d
 #define PC_16 r13w
+#define I_REG_64 rbx
+#define I_REG_32 ebx
+#define I_REG_16 bx
 #define SP_64 r14
 #define SP_32 r14d
 #define SP_8 r14b
 
-#define V_REG(num) (allocatedRegs[num].ind != NOT_ALLOCATED ? V_REGS_8[allocatedRegs[num].ind] : (const Xbyak::Operand&)REG_PTR(num))
+#define V_REG(num) (allocatedVRegs[num] != NOT_ALLOCATED ? V_REGS_8[allocatedVRegs[num]] : (const Xbyak::Operand&)REG_PTR(num))
 #define FLAG_REG r15b 
 #define FLAG_REG_32 r15d
 
@@ -36,7 +38,7 @@
 #define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
 #define RAM_PTR(offset) byte[BASE + I_REG_64 + offsetof(ChipState, RAM) + offset]
 #define SCREEN_PTR(offset) ptr[BASE + offsetof(ChipState, screenBuffer) + (offset * sizeof(uint64_t))]
-#define STACK_PTR word[BASE + offsetof(ChipState, stack) + (SP_64 * sizeof(uint16_t))]
+#define STACK_PTR(offset) word[BASE + offsetof(ChipState, stack) + (offset * sizeof(uint16_t))]
 
 #define DELAY_PTR byte[BASE + offsetof(ChipState, delayTimer)]
 #define SOUND_PTR byte[BASE + offsetof(ChipState, soundTimer)]
@@ -44,63 +46,58 @@
 #define FX0A_FLAG_PTR byte[BASE + offsetof(ChipState, firstFX0ACall)]
 #define FX0A_REG_PTR byte[BASE + offsetof(ChipState, inputReg)]
 
-#define BLOCK_PTR qword[BASE + JITMapBaseOffset + (PC_64 * 8)]
 #define EXECUTE_FLAG_PTR byte[BASE + executeFlagBaseOffset]
-
-constexpr int WIN_SHADOW_SPACE { 32 };
-
-template <typename F>
-uint64_t addr(F func)
-{
-	uint64_t addr;
-	std::memcpy(&addr, &func, sizeof(addr));
-	return addr;
-}
+#define DISPATCH() jmp(qword[BASE + offset(&core.s, &core.JIT.blockMap) + (PC_64 * 8)])
 
 ChipEmitter::ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag) : Xbyak::CodeGenerator(MAX_CACHE_SIZE), core(c)
 {
 	checkCPUSupport();
 
+	uncompiledBlockHandlerPtr = getCurr<uint8_t*>();
+	emitUncompiledBlockHandler();
+
 	L(rspBackup);
 	dq(0);
 
-	uncompiledBlockHandlerPtr = getCodeEndPtr();
-	emitUncompiledBlockHandler();
-
-	dispatcherPtr = getCodeEndPtr();
+	dispatcherPtr = getCurr<uint64_t(*)()>();
 	emitDispatcher();
 
 	codeStartIndex = getSize();
-	executeFlagBaseOffset = static_cast<int32_t>(reinterpret_cast<uint64_t>(&executeFlag) - reinterpret_cast<uint64_t>(&core.s));
+	executeFlagBaseOffset = offset(&core.s, &executeFlag);
 }
 
-void ChipEmitter::newBlock()
+uint8_t* ChipEmitter::newBlock()
 {
-	std::ranges::fill(allocatedRegs, RegAllocation { NOT_ALLOCATED });
-	allocatedRegs[0xF] = RegAllocation { MAX_ALLOC_REGS - 1 };
+	//std::ranges::fill(allocatedRegs, RegAllocation { NOT_ALLOCATED });
+	//allocatedRegs[0xF] = RegAllocation { MAX_ALLOC_REGS - 1 };
 
-	//std::memset(allocatedVRegs.data(), NOT_ALLOCATED, sizeof(allocatedVRegs));
-	//allocatedVRegs[0xF] = MAX_ALLOC_REGS - 1; // V[0xF] is always allocated in r15.
+	std::memset(allocatedVRegs.data(), NOT_ALLOCATED, sizeof(allocatedVRegs));
+	allocatedVRegs[0xF] = MAX_ALLOC_REGS - 1; // V[0xF] is always allocated in r15.
+	rspAllocReg = std::nullopt;
 
-	//std::memset(VRegWeight.data(), 0, sizeof(VRegWeight));
-	//std::memset(modifiedVRegs.data(), false, sizeof(modifiedVRegs)); 
-	//std::memset(initialValUseVRegs.data(), false, sizeof(initialValUseVRegs));
+	std::memset(VRegWeight.data(), 0, sizeof(VRegWeight));
+	std::memset(modifiedVRegs.data(), false, sizeof(modifiedVRegs)); 
+	std::memset(initialValUseVRegs.data(), false, sizeof(initialValUseVRegs));
 
 	instructions = 0;
 	branchedInstrs = 0;
+
+	return getCurr<uint8_t*>();
 }
 
 void ChipEmitter::emitUncompiledBlockHandler()
 {
 	mov(rsp, qword[rip + rspBackup]);
-	mov(ARG1, reinterpret_cast<uint64_t>(&core));
+	lea(ARG1, CORE_PTR);
 	mov(ARG2, PC_64);
-	emitCallFunc(addr(&ChipJITCore::compileBlock), true);
+	emitCallFunc(&ChipJITCore::compileBlock, true);
 	jmp(rax);
 }
 
 void ChipEmitter::emitDispatcher()
 {
+	constexpr int WIN_SHADOW_SPACE { 32 };
+
 	push(rbx);
 	push(rbp);
 	push(r12);
@@ -115,8 +112,7 @@ void ChipEmitter::emitDispatcher()
 	sub(rsp, 8 + WIN_SHADOW_SPACE); // for 16-byte alignment + shadow space on windows
 	mov(qword[rip + rspBackup], rsp);
 
-	mov(BASE, reinterpret_cast<uint64_t>(&core.s));
-	JITMapBaseOffset = static_cast<int32_t>(reinterpret_cast<uint64_t>(&core.JIT.blockMap) - reinterpret_cast<uint64_t>(&core.s));
+	mov(BASE, addr(&core.s));
 
 	xor_(INSTR_COUNT, INSTR_COUNT);
 	movzx(I_REG_32, I_REG_PTR);
@@ -124,7 +120,7 @@ void ChipEmitter::emitDispatcher()
 	movzx(SP_32, SP_PTR);
 	movzx(FLAG_REG_32, REG_PTR(0xF));
 
-	jmp(BLOCK_PTR);
+	DISPATCH();
 	L(dispatcherEnd);
 
 	mov(I_REG_PTR, I_REG_16);
@@ -135,7 +131,7 @@ void ChipEmitter::emitDispatcher()
 	mov(rax, INSTR_COUNT);
 
 	mov(rsp, qword[rip + rspBackup]);
-	add(rsp, 8 + WIN_SHADOW_SPACE); 
+	add(rsp, 8 + WIN_SHADOW_SPACE);
 #ifdef _WIN32
 	pop(rdi);
 	pop(rsi);
@@ -152,7 +148,7 @@ void ChipEmitter::emitDispatcher()
 
 void ChipEmitter::MOV_TO_REG(uint8_t r, const Xbyak::Operand& op)
 {
-	const auto i { allocatedRegs[r].ind };
+	const auto i { allocatedVRegs[r] };
 
 	if (i != NOT_ALLOCATED)
 		movzx(V_REGS_32[i], op); // breaking dependency
@@ -160,46 +156,47 @@ void ChipEmitter::MOV_TO_REG(uint8_t r, const Xbyak::Operand& op)
 		MOV(REG_PTR(r), op);
 }
 
-void ChipEmitter::emitLoadAllocRegs()
-{
-	for (int i = 0; i < 16; i++)
-	{
-		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsLoad)
-			movzx(V_REGS_32[allocatedRegs[i].ind], REG_PTR(i));
-	}
-}
-void ChipEmitter::emitStoreAllocRegs()
-{
-	for (int i = 0; i < 16; i++)
-	{
-		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsStore)
-			mov(REG_PTR(i), V_REGS_8[allocatedRegs[i].ind]);
-	}
-}
+//void ChipEmitter::emitLoadAllocRegs()
+//{
+//	for (int i = 0; i < 16; i++)
+//	{
+//		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsLoad)
+//			movzx(V_REGS_32[allocatedRegs[i].ind], REG_PTR(i));
+//	}
+//}
+//void ChipEmitter::emitStoreAllocRegs()
+//{
+//	for (int i = 0; i < 16; i++)
+//	{
+//		if (allocatedRegs[i].ind != NOT_ALLOCATED && allocatedRegs[i].needsStore)
+//			mov(REG_PTR(i), V_REGS_8[allocatedRegs[i].ind]);
+//	}
+//}
 
 bool ChipEmitter::emitPushAllocRegs()
 {
-	rspReg = -1;
-
-	for (int i = 0; i < 16; i++)
+	if (!rspAllocReg.has_value())
 	{
-		if (allocatedRegs[i].ind == RSP_ALLOC_IND)
+		for (int i = 0; i < 16; i++)
 		{
-			rspReg = i;
-			break;
+			if (allocatedVRegs[i] == RSP_ALLOC_IND)
+			{
+				rspAllocReg = i;
+				break;
+			}
 		}
 	}
 
-	if (rspReg != -1)
-		mov(REG_PTR(rspReg), spl);
+	if (rspAllocReg.has_value())
+		mov(REG_PTR(*rspAllocReg), spl);
 
 	mov(rsp, qword[rip + rspBackup]);
 
 	bool stackAligned { true };
 
-	for (int i = 0; i < 16; i++) 
+	for (int i = 0; i < 16; i++)
 	{
-		const auto val { allocatedRegs[i].ind };
+		const auto val { allocatedVRegs[i] };
 
 		if (val == NOT_ALLOCATED || !CALLER_SAVED_V_REGS[val])
 			continue;
@@ -214,7 +211,7 @@ void ChipEmitter::emitPopAllocRegs()
 {
 	for (int i = 15; i >= 0; i--)
 	{
-		const auto val { allocatedRegs[i].ind };
+		const auto val { allocatedVRegs[i] };
 
 		if (val == NOT_ALLOCATED || !CALLER_SAVED_V_REGS[val])
 			continue;
@@ -222,25 +219,26 @@ void ChipEmitter::emitPopAllocRegs()
 		pop(V_REGS_64[val]);
 	}
 
-	if (rspReg != -1)
-		movzx(esp, REG_PTR(rspReg));
+	if (rspAllocReg.has_value())
+		movzx(esp, REG_PTR(*rspAllocReg));
 }
-void ChipEmitter::emitCallFunc(uint64_t func, bool stackAligned) 
+
+template<typename T>
+void ChipEmitter::emitCallFunc(T func, bool stackAligned)
 {
 	if (!stackAligned)
 		sub(rsp, 8);
 
-	mov(rax, func);
+	mov(rax, addr(func));
  	call(rax);
 }
 
 void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 {
-	const int32_t bitsetOffset { static_cast<int32_t>(reinterpret_cast<uint64_t>(&core.JIT.compiledRam) - reinterpret_cast<uint64_t>(&core.s)) };
-
 	auto checkSmc = [&](bool secondTest, bool endImmediately)
 	{
 		Xbyak::Label noSmc;
+		const auto bitsetOffset { offset(&core.s, &core.JIT.compiledRam) };
 
 		if (!secondTest)
 		{
@@ -261,12 +259,12 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 			stackAligned = !stackAligned;
 		}
 
-		mov(ARG1, reinterpret_cast<uint64_t>(&core));
+		lea(ARG1, CORE_PTR);
 #ifndef _WIN32 // rdx and r8 are ARG's 2 and 3 on win64 calling convention, so values are already there.
 		mov(ARG2, rdx);
 		mov(ARG3, r8);
 #endif
-		emitCallFunc(addr(&ChipJITCore::invalidateBlocks), stackAligned);
+		emitCallFunc(&ChipJITCore::invalidateBlocks, stackAligned);
 
 		if (!secondTest && !endImmediately)
 		{
@@ -325,8 +323,8 @@ void ChipEmitter::emitSelfModifyingCodeCheck(int cnt, uint16_t pc)
 void ChipEmitter::emitIllegalOPHandler()
 {
 	const bool stackAligned { emitPushAllocRegs() };
-	mov(ARG1, reinterpret_cast<uint64_t>(&core));
-	emitCallFunc(addr(&ChipJITCore::illegalOpcodeHandler), stackAligned);
+	mov(ARG1, CORE_PTR);
+	emitCallFunc(&ChipJITCore::illegalOpcodeHandler, stackAligned);
 	emitPopAllocRegs();
 }
 
@@ -335,47 +333,45 @@ void ChipEmitter::emitBreakpoint()
 	int3(); 
 }
 
-//void ChipEmitter::allocateRegs()
-//{
-//	constexpr int ALLOC_THRESHOLD { 2 };
-//
-//	std::vector<std::pair<uint8_t, uint16_t>> usageList{};
-//	usageList.reserve(16);
-//
-//	for (int i = 0; i < 15; i++)
-//	{
-//		if (VRegWeight[i] >= ALLOC_THRESHOLD)
-//			usageList.push_back({ i, VRegWeight[i] });
-//	}
-//
-//	std::sort(usageList.begin(), usageList.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-//
-//	for (int i = 0; i < usageList.size() && i < (MAX_ALLOC_REGS - 1); i++) // -1 because V[0xF] is always allocated.
-//		allocatedVRegs[usageList[i].first] = i;
-//}
+void ChipEmitter::allocateRegs()
+{
+	constexpr int ALLOC_THRESHOLD { 2 };
 
-//void ChipEmitter::emitPrologue()
-//{
-//	for (int i = 0; i < 15; i++)
-//	{
-//		const auto val { allocatedVRegs[i] };
-//
-//		if (val != NOT_ALLOCATED /*&& initialValUseVRegs[i]*/)
-//			movzx(V_REGS_32[val], REG_PTR(i));
-//	}
-//}
+	std::vector<std::pair<uint8_t, uint16_t>> usageList{};
+	usageList.reserve(16);
+
+	for (int i = 0; i < 15; i++)
+	{
+		if (VRegWeight[i] >= ALLOC_THRESHOLD)
+			usageList.push_back({ i, VRegWeight[i] });
+	}
+
+	std::sort(usageList.begin(), usageList.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+
+	for (int i = 0; i < usageList.size() && i < (MAX_ALLOC_REGS - 1); i++) // -1 because V[0xF] is always allocated.
+		allocatedVRegs[usageList[i].first] = i;
+}
+
+void ChipEmitter::emitPrologue()
+{
+	for (int i = 0; i < 15; i++)
+	{
+		const auto val { allocatedVRegs[i] };
+
+		if (val != NOT_ALLOCATED && initialValUseVRegs[i])
+			movzx(V_REGS_32[val], REG_PTR(i));
+	}
+}
 
 void ChipEmitter::emitEpilogue(uint16_t pc)
 {
-	//for (int i = 0; i < 15; i++)
-	//{
-	//	const auto val { allocatedVRegs[i] };
+	for (int i = 0; i < 15; i++)
+	{
+		const auto val { allocatedVRegs[i] };
 
-	//	if (val != NOT_ALLOCATED /*&& modifiedVRegs[i]*/)
-	//		mov(REG_PTR(i), V_REGS_8[val]);
-	//}
-
-	emitStoreAllocRegs();
+		if (val != NOT_ALLOCATED && modifiedVRegs[i])
+			mov(REG_PTR(i), V_REGS_8[val]);
+	}
 
 	movzx(eax, EXECUTE_FLAG_PTR);
 
@@ -386,7 +382,7 @@ void ChipEmitter::emitEpilogue(uint16_t pc)
 
 	test(al, al);
 	jz(dispatcherEnd);
-	jmp(BLOCK_PTR);
+	DISPATCH();
 }
 
 uint8_t* ChipEmitter::emitJumpPlaceholder()
@@ -400,9 +396,9 @@ void ChipEmitter::patchBranchInstr(uint8_t* branchCodeEndPtr, bool incBeforeBran
 	constexpr auto INC_R64_SIZE { 3 };
 	const auto offset { incBeforeBranch ? INC_R64_SIZE : 0 };
 
-	int32_t* jumpOffsetPtr { reinterpret_cast<int32_t*>(branchCodeEndPtr - offset - sizeof(int32_t)) };
 	const int32_t jumpOffset { static_cast<int32_t>(getCodeEndPtr() - branchCodeEndPtr + offset) };
-	*jumpOffsetPtr = jumpOffset;
+	uint8_t* offsetPtr { branchCodeEndPtr - offset - sizeof(int32_t) };
+	std::memcpy(offsetPtr, &jumpOffset, sizeof(jumpOffset));
 }
 
 void ChipEmitter::emitInstrCountAdd(int32_t instrs)
@@ -415,7 +411,8 @@ void ChipEmitter::emitInstrCountAddPlaceholder()
 }
 void ChipEmitter::patchImm32(uint8_t* codeEndPtr, int32_t imm) const
 {
-	*reinterpret_cast<int32_t*>(codeEndPtr - sizeof(int32_t)) = imm;
+	uint8_t* targetPtr { codeEndPtr - sizeof(int32_t) };
+	std::memcpy(targetPtr, &imm, sizeof(imm));
 }
 
 #define quirks core.s.quirks
@@ -442,10 +439,13 @@ void ChipEmitter::emit00E0()
 
 void ChipEmitter::emit00EE(bool restorePC)
 {
-	dec(SP_8);
+	dec(SP_32);
 
 	if (restorePC)
-		movzx(PC_32, STACK_PTR);
+	{
+		movzx(ecx, SP_8);
+		movzx(PC_32, STACK_PTR(rcx));
+	}
 }
 
 void ChipEmitter::emit1NNN(uint16_t addr)
@@ -455,12 +455,13 @@ void ChipEmitter::emit1NNN(uint16_t addr)
 
 void ChipEmitter::emit2NNN(uint16_t addr, uint16_t pc, bool setPC)
 {
-	mov(STACK_PTR, pc);
+	movzx(ecx, SP_8);
+	mov(STACK_PTR(rcx), pc);
 
 	if (setPC)
 		mov(PC_32, addr);
 
-	inc(SP_8);
+	inc(SP_32);
 }
 
 void ChipEmitter::emit5XY0(uint8_t x, uint8_t y, bool incBranches)
@@ -487,7 +488,7 @@ void ChipEmitter::emit9XY0(uint8_t x, uint8_t y, bool incBranches)
 }
 void ChipEmitter::emit3XNN(uint8_t x, uint8_t val, bool incBranches)
 {
-	const auto i { allocatedRegs[x].ind };
+	const auto i { allocatedVRegs[x] };
 
 	if (i != NOT_ALLOCATED && val == 0)
 		test(V_REGS_8[i], V_REGS_8[i]);
@@ -503,7 +504,7 @@ void ChipEmitter::emit3XNN(uint8_t x, uint8_t val, bool incBranches)
 }
 void ChipEmitter::emit4XNN(uint8_t x, uint8_t val, bool incBranches)
 {
-	const auto i { allocatedRegs[x].ind };
+	const auto i { allocatedVRegs[x] };
 
 	if (i != NOT_ALLOCATED && val == 0)
 		test(V_REGS_8[i], V_REGS_8[i]);
@@ -549,7 +550,7 @@ void ChipEmitter::emitEXA1(uint8_t x, bool incBranches)
 
 void ChipEmitter::emit6XNN(uint8_t x, uint8_t val)
 {
-	const auto i { allocatedRegs[x].ind };
+	const auto i { allocatedVRegs[x] };
 
 	if (i != NOT_ALLOCATED)
 	{
@@ -564,10 +565,20 @@ void ChipEmitter::emit6XNN(uint8_t x, uint8_t val)
 
 void ChipEmitter::emit7XNN(uint8_t x, uint8_t val)
 {
-	if (val == 0)
+	switch (val)
+	{
+	case 0x0:
 		return;
-
-	add(V_REG(x), val);
+	case 0x1:
+		inc(V_REG(x));
+		break;
+	case 0xFF:
+		dec(V_REG(x));
+		break;
+	default:
+		add(V_REG(x), val);
+		break;
+	}
 }
 
 void ChipEmitter::emit8XY0(uint8_t x, uint8_t y)
@@ -668,7 +679,7 @@ void ChipEmitter::emit8XY7(uint8_t x, uint8_t y, bool calcFlag)
 	sub(al, V_REG(x));
 
 	if (x != 0xF)
-		mov(V_REG(x), al);
+		MOV_TO_REG(x, al);
 
 	if (calcFlag)
 		setnc(FLAG_REG);
@@ -691,7 +702,7 @@ void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
 		if (!quirks.shifting)
 			emit8XY0(x, y);
 
-		const auto i { allocatedRegs[x].ind };
+		const auto i { allocatedVRegs[x] };
 
 		if (i != NOT_ALLOCATED)
 			add(V_REGS_8[i], V_REGS_8[i]); // is slightly faster than shift
@@ -1094,7 +1105,7 @@ void ChipEmitter::emitRegCopy(int cnt)
 	{
 		for (int i = startInd; i < endInd; i++)
 		{
-			if (allocatedRegs[i].ind != NOT_ALLOCATED)
+			if (allocatedVRegs[i] != NOT_ALLOCATED)
 				return false;
 		}
 
@@ -1235,7 +1246,7 @@ void ChipEmitter::emitFX65(uint8_t x)
 void ChipEmitter::emitFX0A(uint8_t x, uint16_t pc)
 {
 	Xbyak::Label firstCall, end;
-	const auto i { allocatedRegs[x].ind };
+	const auto i { allocatedVRegs[x] };
 
 	mov(PC_32, pc - 2);
 	cmp(FX0A_FLAG_PTR, 0);

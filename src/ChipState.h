@@ -21,23 +21,22 @@ struct ChipState
 	static constexpr int SCR_WIDTH { 64 };
 	static constexpr int SCR_HEIGHT { 32 };
 
-	std::array<uint8_t, RAM_SIZE + RAM_DEADBUF_SIZE> RAM{};
 	alignas (16) std::array<uint8_t, 16> V{};
 
-	std::array<uint16_t, 256> stack{};
-	uint8_t sp{};
-
-	uint16_t I{};
 	uint16_t pc{};
+	uint16_t I{};
+	uint8_t sp{};
 
 	uint8_t delayTimer{};
 	uint8_t soundTimer{};
 
-	alignas(32) std::array<uint64_t, SCR_HEIGHT> screenBuffer{};
-
 	std::array<uint8_t, 16> keys{};
 	int8_t inputReg { -1 };
 	bool firstFX0ACall { true };
+
+	alignas(32) std::array<uint64_t, SCR_HEIGHT> screenBuffer{};
+	std::array<uint16_t, 256> stack{};
+	std::array<uint8_t, RAM_SIZE + RAM_DEADBUF_SIZE> RAM{};
 
 	quirkConfig quirks{};
 

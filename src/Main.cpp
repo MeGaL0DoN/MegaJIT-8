@@ -17,6 +17,7 @@
 #include "Shader.h"
 #include "resources.h"
 #include "ChipInterpretCore.h"
+#include "ChipAsmInterpretCore.h"
 #include "ChipCachedCore.h"
 #include "ChipJITCore.h"
 
@@ -25,6 +26,7 @@ constexpr const char* APP_NAME { "MegaJIT-8" };
 enum class CoreType
 {
     Interpret,
+    AsmInterpret,
     Cached,
     JIT
 };
@@ -36,8 +38,9 @@ std::atomic stoppedExecuting { false };
 
 ChipState s{};
 
-ChipInterpretCore chipInterpretCore { s };
-ChipCachedCore chipCachedCore { s };
+ChipInterpretCore chipInterpretCore { s, executeCore };
+ChipAsmInterpretCore chipAsmInterpretCore { s, executeCore };
+ChipCachedCore chipCachedCore { s, executeCore };
 ChipJITCore chipJITCore { s, executeCore };
 ChipCore* chipCore { &chipJITCore };
 
@@ -47,10 +50,10 @@ CoreType currentCore()
         return CoreType::JIT;
     if (chipCore == &chipInterpretCore)
         return CoreType::Interpret;
-    if (chipCore == &chipCachedCore)
-        return CoreType::Cached;
+    if (chipCore == &chipAsmInterpretCore)
+        return CoreType::AsmInterpret;
 
-    UNREACHABLE();
+    return CoreType::Cached;
 }
 
 bool setStats { false };
@@ -91,7 +94,7 @@ std::string cpuBrandStr(48, '\0');
 void emitCPUNameGetter()
 {
     code.push(code.rbx);
-    code.mov(code.r8, reinterpret_cast<uint64_t>(&cpuBrandStr[0]));
+    code.mov(code.r8, reinterpret_cast<uintptr_t>(cpuBrandStr.data()));
 
     code.xor_(code.ecx, code.ecx);
     code.mov(code.eax, 0x80000002);
@@ -121,7 +124,7 @@ void emitCPUNameGetter()
     code.ret();
 }
 
-// Is guaranteed to take ~100 cycles per iteration on any x86-64 cpu since 'add eax, eax' sequence is fully dependent on previous results.
+// Is guaranteed to take ~100 cycles per iteration on any cpu since 'add eax, eax' sequence is dependent on previous results.
 void emitBurn100xCyclesFunc()
 {
     Xbyak::Label loop;
@@ -219,21 +222,20 @@ void coreThreadExecute()
 
     while (coreThreadRunning) [[likely]]
     {
-        while (executeCore) [[likely]]
+        switch (core)
         {
-            switch (core)
-            {
-            case CoreType::JIT:
-                localInstructions += chipJITCore.execute();
-                break;
-            case CoreType::Cached:
-                localInstructions += chipCachedCore.execute();
-                break;
-            case CoreType::Interpret:
-                chipInterpretCore.execute();
-                localInstructions++;
-                break;
-            }
+        case CoreType::JIT:
+            localInstructions += chipJITCore.execute();
+            break;
+        case CoreType::Interpret:
+            localInstructions += chipInterpretCore.execute();
+            break;
+        case CoreType::AsmInterpret:
+            localInstructions += chipAsmInterpretCore.execute();
+            break;
+        case CoreType::Cached:
+            localInstructions += chipCachedCore.execute();
+            break;
         }
 
         if (setStats)
@@ -262,14 +264,17 @@ inline void startCoreThread()
 
     switch (currentCore())
     {
+    case CoreType::JIT:
+        coreThread = std::thread{ coreThreadExecute<CoreType::JIT> };
+        break;
     case CoreType::Interpret:
         coreThread = std::thread { coreThreadExecute<CoreType::Interpret> };
         break;
+    case CoreType::AsmInterpret:
+        coreThread = std::thread{ coreThreadExecute<CoreType::AsmInterpret> };
+        break;
     case CoreType::Cached:
         coreThread = std::thread { coreThreadExecute<CoreType::Cached> };
-        break;
-    case CoreType::JIT:
-        coreThread = std::thread { coreThreadExecute<CoreType::JIT> };
         break;
     }
 }
@@ -347,7 +352,7 @@ void changePauseState()
 void load1dcell()
 {
     std::stringbuf buf { std::ios::in | std::ios::out };
-    buf.sputn(reinterpret_cast<const char*>(Resources::ROM_1DCELL), sizeof(Resources::ROM_1DCELL));
+    buf.sputn(reinterpret_cast<const char*>(&Resources::ROM_1DCELL[0]), sizeof(Resources::ROM_1DCELL));
     std::istream st { &buf };
 
     setStats = true;
@@ -493,11 +498,12 @@ void renderImGUI()
             ImGui::Text("Current Mode: ");
             ImGui::SameLine();
 
-            if (currentCore() == CoreType::JIT)
+            switch (currentCore())
             {
+            case CoreType::JIT:
                 if (ImGui::Button("JIT"))
                 {
-                    chipCore = &chipInterpretCore;
+                    chipCore = &chipAsmInterpretCore;
                     coreModeChanged();
                 }
 
@@ -508,7 +514,7 @@ void renderImGUI()
                     fileDialogOpen = true;
                     NFD::UniquePathN outPath;
 
-                    if (const nfdresult_t result { NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) }; result == NFD_OKAY)
+                    if (const nfdresult_t result{ NFD::SaveDialog(outPath, asmFilterItem, 1, defaultPath.c_str(), STR("x64_output.txt")) }; result == NFD_OKAY)
                     {
                         threadSafeExec([&]
                         {
@@ -526,35 +532,38 @@ void renderImGUI()
                         chipJITCore.clearJITCache();
                     });
                 }
-            }
-            else
-            {
-                if (currentCore() == CoreType::Interpret)
+                break;
+            case CoreType::AsmInterpret:
+                if (ImGui::Button("ASM Interpreter"))
                 {
-                    if (ImGui::Button("Interpreter"))
-                    {
-                        chipCore = &chipCachedCore;
-                        coreModeChanged();
-                    }
+                    chipCore = &chipInterpretCore;
+                    coreModeChanged();
                 }
-                else
+                break;
+            case CoreType::Interpret:
+                if (ImGui::Button("Interpreter"))
                 {
-                    if (ImGui::Button("Cached Interpret"))
-                    {
-                        chipCore = &chipJITCore;
-                        coreModeChanged();
-                    }
-
-                    ImGui::SeparatorText("Actions");
-
-                    if (ImGui::Button("Clear Cache"))
-                    {
-                        threadSafeExec([&]
-                        {
-                            chipCachedCore.clearCache();
-                        });
-                    }
+                    chipCore = &chipCachedCore;
+                    coreModeChanged();
                 }
+                break;
+            default:
+                if (ImGui::Button("Cached Interoreter"))
+                {
+                    chipCore = &chipJITCore;
+                    coreModeChanged();
+                }
+
+                ImGui::SeparatorText("Actions");
+
+                if (ImGui::Button("Clear Cache"))
+                {
+                    threadSafeExec([&]
+                    {
+                        chipCachedCore.clearCache();
+                    });
+                }
+                break;
             }
 
             ImGui::SeparatorText("Performance");
@@ -856,7 +865,9 @@ int main()
     setBuffers();
     emitCode();
 
-    std::thread initThread { ChipCore::initAudio };
+    srand(time(nullptr));
+
+    std::jthread initThread { ChipCore::initAudio };
     load1dcell();
     startCoreThread();
 
@@ -885,11 +896,11 @@ int main()
                     {
                         chipCore->updateTimers();
 
-                        if (unlimitedMode)
-                            continue;
-
-                        for (int i = 0; i < IPF;)
-                            i += static_cast<int>(chipCore->execute());
+                        if (!unlimitedMode)
+                        {
+                            for (int i = 0; i < IPF;)
+                                i += static_cast<int>(chipCore->execute());
+                        }
                     }
                 }
 
@@ -937,8 +948,6 @@ int main()
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     glfwTerminate();
-
-    initThread.join();
 
     if (coreThreadRunning)
         stopCoreThread();

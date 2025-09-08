@@ -24,8 +24,8 @@ static constexpr uint8_t FONT[]
 void ChipState::reset()
 {
 	pc = 0x200;
-	I = 0;
 	sp = 0;
+	I = 0;
 	delayTimer = 0;
 	soundTimer = 0;
 	inputReg = -1;
@@ -35,6 +35,6 @@ void ChipState::reset()
 	screenBuffer = {};
 	keys = {};
 
-	RAM = {};
+	std::memset(RAM.data() + sizeof(FONT), 0, sizeof(RAM) - sizeof(FONT));
 	std::memcpy(RAM.data(), FONT, sizeof(FONT));
 }

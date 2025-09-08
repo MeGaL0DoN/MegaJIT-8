@@ -1,6 +1,7 @@
 #include "Shader.h"
 #include <glad/glad.h>
 
+#include <cstring>
 #include <fstream>
 #include <iostream>
 
@@ -56,7 +57,7 @@ void Shader::checkCompileErrors(unsigned int shader, const char* type)
 {
     int success;
     char infoLog[1024];
-    if (type != "PROGRAM")
+    if (strcmp(type, "PROGRAM") != 0)
     {
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success)

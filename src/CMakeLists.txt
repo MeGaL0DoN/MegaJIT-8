@@ -15,7 +15,7 @@ endif()
 add_executable(MegaJIT_8 
         Main.cpp
         resources.h
-        macros.h
+        utils.h
         Shader.cpp
         Shader.h
         ChipCore.h
@@ -25,6 +25,8 @@ add_executable(MegaJIT_8
         ChipJITCore.h 
         ChipCachedCore.h 
         ChipInterpretCore.h
+        ChipAsmInterpretCore.h 
+        ChipAsmInterpretCore.cpp
         ChipState.h
         ChipState.cpp
         ChipJITState.h

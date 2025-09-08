@@ -1,21 +1,30 @@
 #pragma once
 
-#include <random>
+#include <cstdlib>
+#include <bit>
+#include <cassert>
 
 #include "ChipCachedState.h"
 #include "ChipCore.h"
-#include "macros.h"
+#include "utils.h"
 
 class ChipCachedCore : public ChipCore
 {
 public:
-	explicit ChipCachedCore(ChipState& s) : ChipCore(s)
-	{}
+	using ChipCore::ChipCore;
 
-	FORCE_INLINE uint64_t execute() override
+	uint64_t execute() override
 	{
-		const auto ind { cache.blockMap[s.pc] };
-		return ind != 0 ? executeBlock(cache.blocks[ind - 1]) : compileBlock();
+		uint64_t instrs { 0 };
+
+		do
+		{
+			const size_t ind { cache.blockMap[s.pc] };
+			instrs += (ind != 0 ? executeBlock(cache.blocks[ind - 1]) : compileBlock());
+		} 
+		while (executeFlag.load(std::memory_order_relaxed));
+
+		return instrs;
 	}
 
 	void clearCache()
@@ -37,18 +46,16 @@ private:
 		uint8_t y;
 		uint8_t nn;
 		uint16_t nnn;
+		uint16_t _; // pad to 8 bytes
 	};
 	struct CacheOp
 	{
-		void (ChipCachedCore::*func)(const Instruction&);
+		void (ChipCachedCore::*func)(Instruction);
 		Instruction instr;
 	};
 
 	ChipCachedState cache{};
 	std::vector<CacheOp> buf{};
-
-	std::default_random_engine eng { std::random_device{}() };
-	std::uniform_int_distribution<> rng { 0, 255 };
 
 	void initialize() override
 	{
@@ -76,7 +83,7 @@ private:
 	{
 		constexpr size_t CACHE_CLEAR_THRESHOLD { 16384 };
 
-		if (buf.size() >= CACHE_CLEAR_THRESHOLD)
+		if (buf.size() >= CACHE_CLEAR_THRESHOLD || cache.blocks.size() == UINT8_MAX)
 			clearCache();
 
 		CacheBlock* block { nullptr };
@@ -94,8 +101,7 @@ private:
 
 		if (block == nullptr)
 		{
-			cache.blocks.emplace_back(s.pc);
-			block = &cache.blocks.back();
+			block = &cache.blocks.emplace_back(s.pc);
 			cache.blockMap[s.pc] = cache.blocks.size();
 		}
 
@@ -120,8 +126,8 @@ private:
 
 			Instruction instr
 			{
-				static_cast<uint8_t>((opcode & 0x0F00) >> 8),
-				static_cast<uint8_t>((opcode & 0x00F0) >> 4),
+				static_cast<uint8_t>((opcode >> 8) & 0xF),
+				static_cast<uint8_t>((opcode >> 4) & 0xF),
 				static_cast<uint8_t>(opcode & 0xFF),
 				static_cast<uint16_t>(opcode & 0xFFF), 
 			};
@@ -404,6 +410,7 @@ private:
 					buf.push_back({ &ChipCachedCore::op_INVALID, instr });
 					return;
 				}
+				break;
 			default:
 				buf.push_back({ &ChipCachedCore::op_INVALID, instr });
 				return;
@@ -420,101 +427,101 @@ private:
 		}
 	}
 
-	void op_INVALID(const Instruction& instr)
+	void op_INVALID(Instruction instr)
 	{
 		s.pc -= 2;
 		assert(false);
 	}
 
-	void op_00E0(const Instruction& instr)
+	void op_00E0(Instruction instr)
 	{
 		std::memset(s.screenBuffer.data(), 0, sizeof(s.screenBuffer));
 	}
-	void op_00EE(const Instruction& instr)
+	void op_00EE(Instruction instr)
 	{
 		s.pc = s.stack[--s.sp];
 	}
-	void op_1NNN(const Instruction& instr)
+	void op_1NNN(Instruction instr)
 	{
 		s.pc = instr.nnn;
 	}
-	void op_2NNN(const Instruction& instr)
+	void op_2NNN(Instruction instr)
 	{
 		s.stack[s.sp++] = s.pc;
 		s.pc = instr.nnn;
 	}
-	void op_3XNN(const Instruction& instr)
+	void op_3XNN(Instruction instr)
 	{
 		if (s.V[instr.x] == instr.nn)
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_4XNN(const Instruction& instr)
+	void op_4XNN(Instruction instr)
 	{
 		if (s.V[instr.x] != instr.nn)
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_5XY0(const Instruction& instr)
+	void op_5XY0(Instruction instr)
 	{
 		if (s.V[instr.x] == s.V[instr.y])
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_6XNN(const Instruction& instr)
+	void op_6XNN(Instruction instr)
 	{
 		s.V[instr.x] = instr.nn;
 	}
-	void op_7XNN(const Instruction& instr)
+	void op_7XNN(Instruction instr)
 	{
 		s.V[instr.x] += instr.nn;
 	}
-	void op_8XY0(const Instruction& instr)
+	void op_8XY0(Instruction instr)
 	{
 		s.V[instr.x] = s.V[instr.y];
 	}
 
 	template<bool vfReset>
-	void op_8XY1(const Instruction& instr)
+	void op_8XY1(Instruction instr)
 	{
 		s.V[instr.x] |= s.V[instr.y];
 		if constexpr (vfReset) s.V[0xF] = 0;
 	}
 	template<bool vfReset>
-	void op_8XY2(const Instruction& instr)
+	void op_8XY2(Instruction instr)
 	{
 		s.V[instr.x] &= s.V[instr.y];
 		if constexpr (vfReset) s.V[0xF] = 0;
 	}
 	template<bool vfReset>
-	void op_8XY3(const Instruction& instr)
+	void op_8XY3(Instruction instr)
 	{
 		s.V[instr.x] ^= s.V[instr.y];
 		if constexpr (vfReset) s.V[0xF] = 0;
 	}
-	void op_8XY4(const Instruction& instr)
+	void op_8XY4(Instruction instr)
 	{
 		s.V[instr.x] += s.V[instr.y];
 		s.V[0xF] = s.V[instr.x] < s.V[instr.y];
 	}
-	void op_8XY5(const Instruction& instr)
+	void op_8XY5(Instruction instr)
 	{
 		const uint8_t flag = s.V[instr.x] >= s.V[instr.y];
 		s.V[instr.x] -= s.V[instr.y];
 		s.V[0xF] = flag;
 	}
 	template<bool shifting>
-	void op_8XY6(const Instruction& instr)
+	void op_8XY6(Instruction instr)
 	{
 		if constexpr (!shifting) s.V[instr.x] = s.V[instr.y];
 		const uint8_t lsb = s.V[instr.x] & 0x1;
 		s.V[instr.x] >>= 1;
 		s.V[0xF] = lsb;
 	}
-	void op_8XY7(const Instruction& instr)
+	void op_8XY7(Instruction instr)
 	{
 		s.V[instr.x] = s.V[instr.y] - s.V[instr.x];
 		s.V[0xF] = s.V[instr.y] >= s.V[instr.x];
 	}
 	template<bool shifting>
-	void op_8XYE(const Instruction& instr)
+	void op_8XYE(Instruction instr)
 	{
 		if constexpr (!shifting) s.V[instr.x] = s.V[instr.y];
 		const uint8_t msb = s.V[instr.x] >> 7;
@@ -522,32 +529,32 @@ private:
 		s.V[0xF] = msb;
 	}
 
-	void op_9XY0(const Instruction& instr)
+	void op_9XY0(Instruction instr)
 	{
 		if (s.V[instr.x] != s.V[instr.y])
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_ANNN(const Instruction& instr)
+	void op_ANNN(Instruction instr)
 	{
 		s.I = instr.nnn;
 	}
 	template <bool jumping>
-	void op_BNNN(const Instruction& instr)
+	void op_BNNN(Instruction instr)
 	{
 		if constexpr (jumping) s.pc = s.V[instr.x] + instr.nnn;
 		else s.pc = s.V[0] + instr.nnn;
 
 		s.pc &= 0xFFF;
 	}
-	void op_CXNN(const Instruction& instr)
+	void op_CXNN(Instruction instr)
 	{
-		s.V[instr.x] = rng(eng) & instr.nn;
+		s.V[instr.x] = static_cast<uint8_t>(rand() & instr.nn);
 	}
 
 	template <bool clipping, uint8_t N>
-	void op_DXYN(const Instruction& instr)
+	void op_DXYN(Instruction instr)
 	{
-		if (N == 0)
+		if constexpr (N == 0)
 		{
 			s.V[0xF] = 0;
 			return;
@@ -566,7 +573,7 @@ private:
 			if constexpr (clipping)
 				spriteMask = sprite >> x;
 			else
-				spriteMask = (sprite << (64 - x)) | (sprite >> x);
+				spriteMask = std::rotr(sprite, x);
 
 			if (s.screenBuffer[y] & spriteMask)
 				s.V[0xF] = 1;
@@ -588,28 +595,28 @@ private:
 		}
 	}
 
-	void op_EX9E(const Instruction& instr)
+	void op_EX9E(Instruction instr)
 	{
 		if (s.keys[s.V[instr.x] & 0xF])
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_EXA1(const Instruction& instr)
+	void op_EXA1(Instruction instr)
 	{
 		if (!s.keys[s.V[instr.x] & 0xF])
-			s.pc = (s.pc + 2) & 0xFFF;
+			s.pc += 2;
 	}
-	void op_FX07(const Instruction& instr)
+	void op_FX07(Instruction instr)
 	{
 		s.V[instr.x] = s.delayTimer;
 	}
-	void op_FX0A(const Instruction& instr)
+	void op_FX0A(Instruction instr)
 	{
-		if (s.firstFX0ACall)
+		if (s.firstFX0ACall) [[unlikely]]
 		{
 			s.inputReg = static_cast<int8_t>(instr.x);
 			s.firstFX0ACall = false;
 		}
-		else if (s.inputReg == -1)
+		else if (s.inputReg == -1) [[unlikely]]
 		{
 			s.firstFX0ACall = true;
 			return;
@@ -617,31 +624,31 @@ private:
 
 		s.pc -= 2;
 	}
-	void op_FX15(const Instruction& instr)
+	void op_FX15(Instruction instr)
 	{
 		s.delayTimer = s.V[instr.x];
 	}
-	void op_FX18(const Instruction& instr)
+	void op_FX18(Instruction instr)
 	{
 		s.soundTimer = s.V[instr.x];
 	}
-	void op_FX1E(const Instruction& instr)
+	void op_FX1E(Instruction instr)
 	{
 		s.I = (s.I + s.V[instr.x]) & 0xFFF;
 	}
-	void op_FX29(const Instruction& instr)
+	void op_FX29(Instruction instr)
 	{
-		s.I = (s.V[instr.x] & 0xF) * 0x5;
+		s.I = (s.V[instr.x] & 0xF) * 5;
 	}
-	void op_FX33(const Instruction& instr)
+	void op_FX33(Instruction instr)
 	{
 		s.RAM[s.I] = s.V[instr.x] / 100;
 
-		if (s.I != 0xFFF)
+		if (s.I != 0xFFF) [[likely]]
 		{
 			s.RAM[s.I + 1] = (s.V[instr.x] / 10) % 10;
 
-			if (s.I != 0xFFE)
+			if (s.I != 0xFFE) [[likely]]
 				s.RAM[s.I + 2] = s.V[instr.x] % 10;
 		}
 
@@ -649,9 +656,9 @@ private:
 	}
 
 	template<bool increment>
-	void op_FX55(const Instruction& instr)
+	void op_FX55(Instruction instr)
 	{
-		if ((s.I + instr.x) > 0xFFF)
+		if ((s.I + instr.x) > 0xFFF) [[unlikely]]
 			return;
 
 		for (int i = 0; i <= instr.x; i++)
@@ -663,7 +670,7 @@ private:
 			s.I = (s.I + instr.x + 1) & 0xFFF;
 	}
 	template<bool increment>
-	void op_FX65(const Instruction& instr)
+	void op_FX65(Instruction instr)
 	{
 		for (int i = 0; i <= instr.x; i++)
 			s.V[i] = s.RAM[s.I + i];

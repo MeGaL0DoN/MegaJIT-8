@@ -1,30 +1,29 @@
 #pragma once
 
-#include <vector>
 #include <cstring>
-#include <algorithm>
+#include <optional>
 
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
 
 #include "ChipState.h"
-#include "macros.h"
+#include "utils.h"
 
-struct RegAllocation
-{
-	uint8_t ind{};
-	bool needsLoad{};
-	bool needsStore{};
-};
+//struct RegAllocation
+//{
+//	uint8_t ind{};
+//	bool needsLoad{};
+//	bool needsStore{};
+//};
 
 class ChipJITCore;
 
 class ChipEmitter : Xbyak::CodeGenerator
 {
 public:
-	static constexpr size_t MAX_CACHE_SIZE { 1048576 };
-	static constexpr int MAX_ALLOC_REGS { 7 };
-	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
+	static constexpr size_t MAX_CACHE_SIZE{ 1048576 };
+	static constexpr int MAX_ALLOC_REGS{ 7 };
+	static constexpr uint8_t NOT_ALLOCATED{ static_cast<uint8_t>(-1) };
 
 private:
 	ChipJITCore& core;
@@ -41,24 +40,27 @@ private:
 		BMI2 = cpuCaps.has(Xbyak::util::Cpu::tBMI2);
 		AMD_CPU = cpuCaps.has(Xbyak::util::Cpu::tAMD);
 	}
-	
-	uint8_t *uncompiledBlockHandlerPtr, *dispatcherPtr;
+
+	uint8_t* uncompiledBlockHandlerPtr;
+	uint64_t(*dispatcherPtr)();
 	uint64_t codeStartIndex;
 
-	int32_t executeFlagBaseOffset, JITMapBaseOffset;
+	int32_t executeFlagBaseOffset;
 	Xbyak::Label dispatcherEnd, rspBackup;
 
+	std::array<uint8_t, 16> allocatedVRegs{};
+
 	static constexpr int RSP_ALLOC_IND { 5 };
-	int rspReg { -1 };
+	std::optional<uint8_t> rspAllocReg;
 
 	std::array<Xbyak::Reg8, MAX_ALLOC_REGS> V_REGS_8 { sil, dil, r9b, r10b, r11b, spl, r15b };
 	std::array<Xbyak::Reg32, MAX_ALLOC_REGS> V_REGS_32 { esi, edi, r9d, r10d, r11d, esp, r15d };
 	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rsi, rdi, r9, r10, r11, rsp, r15 };
 
 #ifdef _WIN32
-	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false, false };
+	static constexpr std::array CALLER_SAVED_V_REGS{ false, false, true, true, true, false, false };
 #else
-	static constexpr std::array CALLER_SAVED_V_REGS { true, true, true, true, true, false, false };
+	static constexpr std::array CALLER_SAVED_V_REGS{ true, true, true, true, true, false, false };
 #endif
 
 	void MOV_TO_REG(uint8_t r, const Xbyak::Operand& op);
@@ -78,37 +80,37 @@ private:
 	void MOV(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			mov(dst, src);
-		});
+			});
 	}
 	void CMP(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			cmp(dst, src);
-		});
+			});
 	}
 	void AND(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			and_(dst, src);
-		});
+			});
 	}
 	void XOR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			xor_(dst, src);
-		});
+			});
 	}
 	void OR(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			or_(dst, src);
-		});
+			});
 	}
 	void SUB(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			sub(dst, src);
-		});
+			});
 	}
 	void ADD(const Xbyak::Operand& op1, const Xbyak::Operand& op2) {
 		PerformOp(op1, op2, [this](const Xbyak::Operand& dst, const Xbyak::Operand& src) {
 			add(dst, src);
-		});
+			});
 	}
 
 	template <bool toMem>
@@ -117,46 +119,41 @@ private:
 
 	bool emitPushAllocRegs();
 	void emitPopAllocRegs();
-	void emitCallFunc(uint64_t func, bool stackAligned);
+
+	template<typename T>
+	void emitCallFunc(T func, bool stackAligned);
 
 	void emitUncompiledBlockHandler();
 	void emitDispatcher();
 
 public:
+	std::array<int, 16> VRegWeight{};
+	std::array<bool, 16> modifiedVRegs{};
+	std::array<bool, 16> initialValUseVRegs{};
 
-	//std::array<int, 16> VRegWeight{};
-	//std::array<bool, 16> modifiedVRegs{};
-	//std::array<bool, 16> initialValUseVRegs{};
-
-	std::array<RegAllocation, 16> allocatedRegs;
-	uint16_t instructions { 0 };
-	uint16_t branchedInstrs { 0 };
+	//std::array<RegAllocation, 16> allocatedRegs;
+	uint16_t instructions{ 0 };
+	uint16_t branchedInstrs{ 0 };
 
 	ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag);
 
-	uint8_t* getCodePtr() const { return const_cast<uint8_t*>(getCode()); }
-	uint8_t* getCodeEndPtr() const { return getCodePtr() + getSize(); }
+	uint8_t* getCodePtr() const { return getCode<uint8_t*>(); }
+	uint8_t* getCodeEndPtr() const { return getCurr<uint8_t*>(); }
 	size_t getCodeSize() const { return getSize(); }
 
 	uint8_t* getUncompiledPtr() const { return uncompiledBlockHandlerPtr; }
 
-	void clearCache()
-	{
-		setSize(codeStartIndex);
-	}
+	void clearCache() { setSize(codeStartIndex); }
 
-	FORCE_INLINE uint64_t execute() const
-	{
-		return reinterpret_cast<uint64_t(*)()>(dispatcherPtr)();
-	}
-	
-	void newBlock();
-	//void allocateRegs();
-	//void emitPrologue();
+	FORCE_INLINE uint64_t execute() const { return dispatcherPtr(); }
+
+	uint8_t* newBlock();
+	void allocateRegs();
+	void emitPrologue();
 	void emitEpilogue(uint16_t pc = -1);
 
-	void emitLoadAllocRegs();
-	void emitStoreAllocRegs();
+	//void emitLoadAllocRegs();
+	//void emitStoreAllocRegs();
 
 	void emitIllegalOPHandler();
 	void emitBreakpoint();
