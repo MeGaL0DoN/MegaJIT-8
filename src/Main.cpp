@@ -57,9 +57,9 @@ CoreType currentCore()
 }
 
 bool setStats { false };
-uint64_t executedInstructions{};
-double cpuFrequency{};
-std::string statsStr { "0000.000 MIPS | 00.000 MIPF" };
+uint64_t executedInstructions{}, accumulatedInstructions{};
+double cpuFrequency{}, totalTime{};
+std::string statsStr { "0000.000 MIPS | 00.000 MIPF" }, avgPerfStr { "Avg. over 0 seconds: 0000.000 MIPS" };
 
 bool unlimitedMode { true };
 
@@ -325,6 +325,9 @@ void clearCoreCache()
 
 void coreModeChanged()
 {
+    accumulatedInstructions = 0;
+    totalTime = 0.0;
+
     if (!coreThreadRunning)
         return;
 
@@ -342,7 +345,11 @@ void changePauseState()
         if (paused)
             stopCoreThread();
         else
+        {
             startCoreThread();
+            totalTime = 0.0;
+            accumulatedInstructions = 0;
+        }
     }
 
     if (paused)
@@ -577,6 +584,9 @@ void renderImGUI()
 
                     if (!paused)
                         startCoreThread();
+
+                    totalTime = 0.0;
+                    accumulatedInstructions = 0;
                 }
                 else
                 {
@@ -606,7 +616,10 @@ void renderImGUI()
             ImGui::Spacing();
 
             if (unlimitedMode)
+            {
                 ImGui::Text("Stats: %s", statsStr.c_str());
+                ImGui::Text("%s", avgPerfStr.c_str());
+            }
             else
                 ImGui::SliderInt("IPF", &IPF, 1, 100);
 
@@ -867,7 +880,7 @@ int main()
 
     srand(time(nullptr));
 
-    std::jthread initThread { ChipCore::initAudio };
+    std::thread initThread { ChipCore::initAudio };
     load1dcell();
     startCoreThread();
 
@@ -919,6 +932,8 @@ int main()
                     setStats = true;
                     threadSafeExec([&]() {});
                     executedInstructions = static_cast<uint64_t>(static_cast<double>(executedInstructions) / secondsTimer);
+                    accumulatedInstructions += executedInstructions;
+                    totalTime += secondsTimer;
                 }
                 else
                     executedInstructions = 0;
@@ -935,6 +950,10 @@ int main()
                 oss.str("");
                 oss << mips << " MIPS | " << mipf << " MIPF";
                 statsStr = oss.str();
+
+                oss.str("");
+                oss << "Avg. over " << static_cast<int>(totalTime) << " seconds: " << ((accumulatedInstructions / static_cast<int>(totalTime)) / 1e6) << " MIPS";
+                avgPerfStr = oss.str();
             }
 
             secondsTimer = 0;
@@ -948,6 +967,8 @@ int main()
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     glfwTerminate();
+
+    initThread.join();
 
     if (coreThreadRunning)
         stopCoreThread();

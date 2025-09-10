@@ -616,11 +616,15 @@ private:
 			s.inputReg = static_cast<int8_t>(instr.x);
 			s.firstFX0ACall = false;
 		}
-		else if (s.inputReg == -1) [[unlikely]]
+
+		do
 		{
-			s.firstFX0ACall = true;
-			return;
-		}
+			if (s.inputReg == -1) [[unlikely]]
+			{
+				s.firstFX0ACall = true;
+				return;
+			}
+		} while (executeFlag.load(std::memory_order_relaxed));
 
 		s.pc -= 2;
 	}

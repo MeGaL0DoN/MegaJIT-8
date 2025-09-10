@@ -234,18 +234,24 @@ public:
 			regX = s.delayTimer;
 			DISPATCH();
 		case 0x0A:
+			pc -= 2;
+
 			if (s.firstFX0ACall) [[unlikely]]
 			{
 				s.inputReg = static_cast<int8_t>(x);
 				s.firstFX0ACall = false;
 			}
-			else if (s.inputReg == -1) [[unlikely]]
-			{
-				s.firstFX0ACall = true;
-				DISPATCH();
-			}
 
-			pc -= 2;
+			do
+			{
+				if (s.inputReg == -1) [[unlikely]]
+				{
+					pc += 2;
+					s.firstFX0ACall = true;
+					break;
+				}
+			} while (executeFlag.load(std::memory_order_relaxed));
+
 			DISPATCH();
 		case 0x1E:
 			s.I = (s.I + regX) & 0xFFF;

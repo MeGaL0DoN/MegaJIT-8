@@ -1,4 +1,5 @@
 #include "ChipAsmInterpretCore.h"
+#include <cassert>
 #include "utils.h"
 
 #define BASE rbp
@@ -26,6 +27,11 @@
 #define KEY_PTR(offset) byte[BASE + offsetof(ChipState, keys) + offset]
 #define FX0A_FLAG_PTR byte[BASE + offsetof(ChipState, firstFX0ACall)]
 #define FX0A_REG_PTR byte[BASE + offsetof(ChipState, inputReg)]
+
+void invalidHandler()
+{
+	assert(false);
+}
 
 ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& executeFlag) : ChipCore(s, executeFlag), Xbyak::CodeGenerator(786432)
 {
@@ -156,11 +162,14 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	Xbyak::Label dispatcher, end;
 	L(dispatcher);
 
-	auto DISPATCH = [&]()
+	auto DISPATCH = [&](bool checkEnd = false)
 	{
 		inc(INSTR_COUNT);
-		cmp(byte[BASE + offset(&s, &executeFlag)], 0);
-		jz(end, T_NEAR);
+		if (checkEnd)
+		{
+			cmp(byte[BASE + offset(&s, &executeFlag)], 0);
+			jz(end, T_NEAR);
+		}
 
 		movzx(eax, word[BASE + offsetof(ChipState, RAM) + PC_64]);
 		add(PC_32, 2);
@@ -194,6 +203,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 		and_(ecx, 0xF);
 	};
 
+	align(64);
 	L(op00E0);
 	if (Xbyak::util::Cpu().has(Xbyak::util::Cpu::tAVX))
 	{
@@ -213,25 +223,29 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	}
 	DISPATCH();
 
+	align(64);
 	L(op00EE);
 	dec(SP_32);
 	movzx(ecx, SP_8);
 	movzx(PC_32, STACK_PTR(rcx));
-	DISPATCH();
+	DISPATCH(true);
 
+	align(64);
 	L(op1NNN);
 	loadNNN();
 	movzx(PC_32, ax);
-	DISPATCH();
+	DISPATCH(true);
 
+	align(64);
 	L(op2NNN);
 	movzx(ecx, SP_8);
 	loadNNN();
 	mov(STACK_PTR(rcx), PC_16);
 	movzx(PC_32, ax);
 	inc(SP_32);
-	DISPATCH();
+	DISPATCH(true);
 
+	align(64);
 	L(op3XNN);
 	loadVxPtr();
 	cmp(V_REG(rcx), ah);
@@ -241,6 +255,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipNotEq);
 	DISPATCH();
 
+	align(64);
 	L(op4XNN);
 	loadVxPtr();
 	cmp(V_REG(rcx), ah);
@@ -250,6 +265,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipEq);
 	DISPATCH();
 
+	align(64);
 	L(op5XY0);
 	loadVyAndVxPtr();
 	cmp(V_REG(rcx), al);
@@ -259,51 +275,60 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipRegNotEq);
 	DISPATCH();
 
+	align(64);
 	L(op6XNN);
 	loadVxPtr();
 	mov(V_REG(rcx), ah);
 	DISPATCH();
 
+	align(64);
 	L(op7XNN);
 	loadVxPtr();
 	add(V_REG(rcx), ah);
 	DISPATCH();
 
+	align(64);
 	L(op8XY0);
 	loadVyAndVxPtr();
 	mov(V_REG(rcx), al);
 	DISPATCH();
 
+	align(64);
 	L(op8XY1);
 	loadVyAndVxPtr();
 	or_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
+	align(64);
 	L(op8XY2);
 	loadVyAndVxPtr();
 	and_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
+	align(64);
 	L(op8XY3);
 	loadVyAndVxPtr();
 	xor_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
+	align(64);
 	L(op8XY4);
 	loadVyAndVxPtr();
 	add(V_REG(rcx), al);
 	setc(FLAG_REG);
 	DISPATCH();
 
+	align(64);
 	L(op8XY5);
 	loadVyAndVxPtr();
 	sub(V_REG(rcx), al);
 	setnc(FLAG_REG);
 	DISPATCH();
 
+	align(64);
 	L(op8XY6); // shifting quirk
 	loadVyAndVxPtr();
 	shr(eax, 1);
@@ -311,6 +336,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setc(FLAG_REG);
 	DISPATCH();
 
+	align(64);
 	L(op8XY7);
 	loadVyAndVxPtr();
 	sub(al, V_REG(rcx));
@@ -318,6 +344,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setnc(FLAG_REG);
 	DISPATCH();
 
+	align(64);
 	L(op8XYE); // shifting quirk
 	loadVyAndVxPtr();
 	add(al, al);
@@ -325,6 +352,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setc(FLAG_REG);
 	DISPATCH();
 
+	align(64);
 	L(op9XY0);
 	loadVyAndVxPtr();
 	cmp(V_REG(rcx), al);
@@ -334,19 +362,22 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipRegEq);
 	DISPATCH();
 
+	align(64);
 	L(opANNN);
 	loadNNN();
 	movzx(I_REG_32, ax);
 	DISPATCH();
 
+	align(64);
 	L(opBNNN); // jumping quirk off
 	movzx(ecx, V_REG(0));
 	loadNNN();
 	movzx(PC_32, ax);
 	add(PC_32, ecx);
 	and_(PC_32, 0xFFF);
-	DISPATCH();
+	DISPATCH(true);
 
+	align(64);
 	L(opCXNN);
 	mov(ecx, eax);
 	rdtsc(); // using cpu timestamp as a random number
@@ -355,15 +386,17 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(V_REG(rcx), al);
 	DISPATCH();
 
+	align(64);
 	L(opDXY0);
 	mov(FLAG_REG, 0);
 	DISPATCH();
 
+	align(64);
 	L(opDXY1);
 	loadVyAndVxPtr();
+	movzx(r8d, RAM_PTR(0));
 	movzx(ecx, V_REG(rcx));
 	and_(eax, ChipState::SCR_HEIGHT - 1);
-	movzx(r8d, RAM_PTR(0));
 	mov(r9, SCREEN_PTR(rax));
 	shl(r8, 56);
 	shrx(r8, r8, rcx);
@@ -373,6 +406,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(SCREEN_PTR(rax), r8);
 	DISPATCH();
 
+	align(64);
 	L(opDXYN);
 	Xbyak::Label dxynEnd;
 	movzx(edx, ah);
@@ -405,8 +439,10 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(dxynEnd);
 	DISPATCH();
 
+	align(64);
 	L(opEX9E);
 	loadVx();
+	and_(eax, 0xF);
 	movzx(eax, KEY_PTR(rax));
 	test(al, al);
 	Xbyak::Label skipNotPressed;
@@ -415,8 +451,10 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipNotPressed);
 	DISPATCH();
 
+	align(64);
 	L(opEXA1);
 	loadVx();
+	and_(eax, 0xF);
 	movzx(eax, KEY_PTR(rax));
 	test(al, al);
 	Xbyak::Label skipPressed;
@@ -425,38 +463,66 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipPressed);
 	DISPATCH();
 
+	align(64);
 	L(opFX07);
 	movzx(ecx, DELAY_PTR);
 	and_(eax, 0xF);
 	mov(V_REG(rax), cl);
 	DISPATCH();
 
+	align(64);
 	L(opFX0A);
-	// TODO
-	DISPATCH();
+	Xbyak::Label waitKey, waitDone, fx0AEnd;
+	sub(PC_32, 2);
+	cmp(FX0A_FLAG_PTR, 0);
+	jz(waitKey);
 
+	and_(eax, 0xF);
+	mov(FX0A_REG_PTR, al);
+	mov(FX0A_FLAG_PTR, 0);
+
+	L(waitKey);
+	cmp(FX0A_REG_PTR, -1);
+	jz(waitDone);
+	wait();
+	cmp(byte[BASE + offset(&s, &executeFlag)], 0);
+	jnz(waitKey);
+
+	L(fx0AEnd);
+	DISPATCH(true);
+
+	L(waitDone);
+	add(PC_32, 2);
+	mov(FX0A_FLAG_PTR, 1);
+	jmp(fx0AEnd);
+
+	align(64);
 	L(opFX15);
 	loadVx();
 	mov(DELAY_PTR, al);
 	DISPATCH();
 
+	align(64);
 	L(opFX18);
 	loadVx();
 	mov(SOUND_PTR, al);
 	DISPATCH();
 
+	align(64);
 	L(opFX1E);
 	loadVx();
 	add(I_REG_32, eax);
 	and_(I_REG_32, 0xFFF);
 	DISPATCH();
 
+	align(64);
 	L(opFX29);
 	loadVx();
 	and_(eax, 0xF);
 	lea(I_REG_32, ptr[rax + rax * 4]);
 	DISPATCH();
 
+	align(64);
 	L(opFX33);
 	Xbyak::Label fx33oob;
 	loadVx();
@@ -480,6 +546,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(fx33oob);
 	DISPATCH();
 
+	align(64);
 	L(opFX55);
 	Xbyak::Label fx55end, fx55oob;
 	and_(eax, 0xF);
@@ -503,6 +570,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(fx55oob);
 	DISPATCH();
 
+	align(64);
 	L(opFX65);
 	Xbyak::Label fx65end;
 	and_(eax, 0xF);
@@ -523,7 +591,21 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	DISPATCH();
 
 	L(opInvalid);
-	jmp(opInvalid); // TODO
+#ifndef _WIN32
+	push(rdi);
+	push(rsi);
+#endif
+	mov(rax, addr(invalidHandler));
+	call(rax);
+#ifndef _WIN32
+	pop(rsi);
+	pop(rdi);
+#endif
+	Xbyak::Label wait;
+	L(wait);
+	pause();
+	cmp(byte[BASE + offset(&s, &executeFlag)], 0);
+	jnz(wait);
 
 	L(end);
 	mov(rax, INSTR_COUNT);

@@ -1245,26 +1245,26 @@ void ChipEmitter::emitFX65(uint8_t x)
 
 void ChipEmitter::emitFX0A(uint8_t x, uint16_t pc)
 {
-	Xbyak::Label firstCall, end;
-	const auto i { allocatedVRegs[x] };
+	Xbyak::Label waitKey, waitDone, end;
 
 	mov(PC_32, pc - 2);
 	cmp(FX0A_FLAG_PTR, 0);
-	jnz(firstCall);
+	jz(waitKey);
 
-	cmp(FX0A_REG_PTR, -1);
-	jnz(end);
-
-	if (i != NOT_ALLOCATED)
-		movzx(V_REGS_32[i], REG_PTR(x));
-
-	mov(FX0A_FLAG_PTR, 1);
-	mov(PC_32, pc);
-	jmp(end);
-
-	L(firstCall);
 	mov(FX0A_REG_PTR, x);
 	mov(FX0A_FLAG_PTR, 0);
+
+	L(waitKey);
+	cmp(FX0A_REG_PTR, -1);
+	jz(waitDone);
+	wait();
+	cmp(EXECUTE_FLAG_PTR, 0);
+	jnz(waitKey);
+	jmp(end);
+
+	L(waitDone);
+	mov(FX0A_FLAG_PTR, 1);
+	mov(PC_32, pc);
 
 	L(end);
 }
