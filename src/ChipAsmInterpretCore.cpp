@@ -28,6 +28,8 @@
 #define FX0A_FLAG_PTR byte[BASE + offsetof(ChipState, firstFX0ACall)]
 #define FX0A_REG_PTR byte[BASE + offsetof(ChipState, inputReg)]
 
+#define EXECUTE_FLAG_PTR byte[BASE + offset(&s, &executeFlag)]
+
 void invalidHandler()
 {
 	assert(false);
@@ -162,23 +164,20 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	Xbyak::Label dispatcher, end;
 	L(dispatcher);
 
-	auto DISPATCH = [&](bool checkEnd = false)
+	auto DISPATCH = [&]()
 	{
 		inc(INSTR_COUNT);
-		if (checkEnd)
-		{
-			cmp(byte[BASE + offset(&s, &executeFlag)], 0);
-			jz(end, T_NEAR);
-		}
+		cmp(EXECUTE_FLAG_PTR, 0);
+		jz(end, T_NEAR);
 
 		movzx(eax, word[BASE + offsetof(ChipState, RAM) + PC_64]);
 		add(PC_32, 2);
-		jmp(qword[TABLE_BASE + rax * 8]);
+		jmp(ptr[TABLE_BASE + rax * 8]);
 	};
 
 	movzx(eax, word[BASE + offsetof(ChipState, RAM) + PC_64]);
 	add(PC_32, 2);
-	jmp(qword[TABLE_BASE + rax * 8]);
+	jmp(ptr[TABLE_BASE + rax * 8]);
 
 	auto loadNNN = [&]()
 	{
@@ -228,13 +227,13 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	dec(SP_32);
 	movzx(ecx, SP_8);
 	movzx(PC_32, STACK_PTR(rcx));
-	DISPATCH(true);
+	DISPATCH();
 
 	align(64);
 	L(op1NNN);
 	loadNNN();
 	movzx(PC_32, ax);
-	DISPATCH(true);
+	DISPATCH();
 
 	align(64);
 	L(op2NNN);
@@ -243,7 +242,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(STACK_PTR(rcx), PC_16);
 	movzx(PC_32, ax);
 	inc(SP_32);
-	DISPATCH(true);
+	DISPATCH();
 
 	align(64);
 	L(op3XNN);
@@ -375,13 +374,13 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	movzx(PC_32, ax);
 	add(PC_32, ecx);
 	and_(PC_32, 0xFFF);
-	DISPATCH(true);
+	DISPATCH();
 
 	align(64);
 	L(opCXNN);
 	mov(ecx, eax);
 	rdtsc(); // using cpu timestamp as a random number
-	and_(eax, ch);
+	and_(al, ch);
 	and_(ecx, 0xF);
 	mov(V_REG(rcx), al);
 	DISPATCH();
@@ -472,7 +471,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 
 	align(64);
 	L(opFX0A);
-	Xbyak::Label waitKey, waitDone, fx0AEnd;
+	Xbyak::Label waitKey;
 	sub(PC_32, 2);
 	cmp(FX0A_FLAG_PTR, 0);
 	jz(waitKey);
@@ -482,19 +481,15 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(FX0A_FLAG_PTR, 0);
 
 	L(waitKey);
-	cmp(FX0A_REG_PTR, -1);
-	jz(waitDone);
 	wait();
-	cmp(byte[BASE + offset(&s, &executeFlag)], 0);
+	cmp(EXECUTE_FLAG_PTR, 0);
+	jz(end, T_NEAR);
+	cmp(FX0A_REG_PTR, -1);
 	jnz(waitKey);
 
-	L(fx0AEnd);
-	DISPATCH(true);
-
-	L(waitDone);
 	add(PC_32, 2);
 	mov(FX0A_FLAG_PTR, 1);
-	jmp(fx0AEnd);
+	DISPATCH();
 
 	align(64);
 	L(opFX15);
@@ -604,7 +599,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	Xbyak::Label wait;
 	L(wait);
 	pause();
-	cmp(byte[BASE + offset(&s, &executeFlag)], 0);
+	cmp(EXECUTE_FLAG_PTR, 0);
 	jnz(wait);
 
 	L(end);

@@ -10,9 +10,6 @@ out vec4 FragColor;
 in vec2 TexCoord;
 
 uniform sampler2D texture1;
-
-uniform vec4 backgroundCol;
-uniform vec4 foregroundCol;
 uniform bool rainbow;
 
 void main()
@@ -21,7 +18,7 @@ void main()
 
     if (text.r == 0)
     {
-        FragColor = backgroundCol;
+        FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     }
     else if (rainbow)
     {
@@ -61,7 +58,7 @@ void main()
     }
     else
     {
-        FragColor = foregroundCol;
+        FragColor = vec4(1.0, 1.0, 1.0, 1.0);
     }
 }
 )";

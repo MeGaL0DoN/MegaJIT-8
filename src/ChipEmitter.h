@@ -9,21 +9,14 @@
 #include "ChipState.h"
 #include "utils.h"
 
-//struct RegAllocation
-//{
-//	uint8_t ind{};
-//	bool needsLoad{};
-//	bool needsStore{};
-//};
-
 class ChipJITCore;
 
 class ChipEmitter : Xbyak::CodeGenerator
 {
 public:
-	static constexpr size_t MAX_CACHE_SIZE{ 1048576 };
-	static constexpr int MAX_ALLOC_REGS{ 7 };
-	static constexpr uint8_t NOT_ALLOCATED{ static_cast<uint8_t>(-1) };
+	static constexpr size_t MAX_CACHE_SIZE { 1048576 };
+	static constexpr int MAX_ALLOC_REGS { 7 };
+	static constexpr uint8_t NOT_ALLOCATED { static_cast<uint8_t>(-1) };
 
 private:
 	ChipJITCore& core;
@@ -58,9 +51,9 @@ private:
 	std::array<Xbyak::Reg64, MAX_ALLOC_REGS> V_REGS_64 { rsi, rdi, r9, r10, r11, rsp, r15 };
 
 #ifdef _WIN32
-	static constexpr std::array CALLER_SAVED_V_REGS{ false, false, true, true, true, false, false };
+	static constexpr std::array CALLER_SAVED_V_REGS { false, false, true, true, true, false, false };
 #else
-	static constexpr std::array CALLER_SAVED_V_REGS{ true, true, true, true, true, false, false };
+	static constexpr std::array CALLER_SAVED_V_REGS { true, true, true, true, true, false, false };
 #endif
 
 	void MOV_TO_REG(uint8_t r, const Xbyak::Operand& op);
@@ -131,9 +124,8 @@ public:
 	std::array<bool, 16> modifiedVRegs{};
 	std::array<bool, 16> initialValUseVRegs{};
 
-	//std::array<RegAllocation, 16> allocatedRegs;
-	uint16_t instructions{ 0 };
-	uint16_t branchedInstrs{ 0 };
+	uint16_t instructions { 0 };
+	uint16_t branchedInstrs { 0 };
 
 	ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag);
 
@@ -151,9 +143,6 @@ public:
 	void allocateRegs();
 	void emitPrologue();
 	void emitEpilogue(uint16_t pc = -1);
-
-	//void emitLoadAllocRegs();
-	//void emitStoreAllocRegs();
 
 	void emitIllegalOPHandler();
 	void emitBreakpoint();

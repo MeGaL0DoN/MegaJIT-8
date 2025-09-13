@@ -27,7 +27,7 @@
 #define SP_32 r14d
 #define SP_8 r14b
 
-#define V_REG(num) (allocatedVRegs[num] != NOT_ALLOCATED ? V_REGS_8[allocatedVRegs[num]] : (const Xbyak::Operand&)REG_PTR(num))
+#define V_REG(num) (allocatedVRegs[num] != NOT_ALLOCATED ? V_REGS_8[allocatedVRegs[num]] : (const Xbyak::Operand&)byte[REG_PTR(num)])
 #define FLAG_REG r15b 
 #define FLAG_REG_32 r15d
 
@@ -35,8 +35,8 @@
 #define PC_PTR word[BASE + offsetof(ChipState, pc)]
 #define SP_PTR byte[BASE + offsetof(ChipState, sp)]
 
-#define REG_PTR(num) byte[BASE + offsetof(ChipState, V) + num]
-#define RAM_PTR(offset) byte[BASE + I_REG_64 + offsetof(ChipState, RAM) + offset]
+#define REG_PTR(num) BASE + offsetof(ChipState, V) + num
+#define RAM_PTR(offset) BASE + I_REG_64 + offsetof(ChipState, RAM) + offset
 #define SCREEN_PTR(offset) ptr[BASE + offsetof(ChipState, screenBuffer) + (offset * sizeof(uint64_t))]
 #define STACK_PTR(offset) word[BASE + offsetof(ChipState, stack) + (offset * sizeof(uint16_t))]
 
@@ -47,7 +47,7 @@
 #define FX0A_REG_PTR byte[BASE + offsetof(ChipState, inputReg)]
 
 #define EXECUTE_FLAG_PTR byte[BASE + executeFlagBaseOffset]
-#define DISPATCH() jmp(qword[BASE + offset(&core.s, &core.JIT.blockMap) + (PC_64 * 8)])
+#define DISPATCH() jmp(ptr[BASE + offset(&core.s, &core.JIT.blockMap) + (PC_64 * 8)])
 
 ChipEmitter::ChipEmitter(ChipJITCore& c, std::atomic<bool>& executeFlag) : Xbyak::CodeGenerator(MAX_CACHE_SIZE), core(c)
 {
@@ -118,7 +118,7 @@ void ChipEmitter::emitDispatcher()
 	movzx(I_REG_32, I_REG_PTR);
 	movzx(PC_32, PC_PTR);
 	movzx(SP_32, SP_PTR);
-	movzx(FLAG_REG_32, REG_PTR(0xF));
+	movzx(FLAG_REG_32, byte[REG_PTR(0xF)]);
 
 	DISPATCH();
 	L(dispatcherEnd);
@@ -126,7 +126,7 @@ void ChipEmitter::emitDispatcher()
 	mov(I_REG_PTR, I_REG_16);
 	mov(PC_PTR, PC_16);
 	mov(SP_PTR, SP_8);
-	mov(REG_PTR(0xF), FLAG_REG);
+	mov(byte[REG_PTR(0xF)], FLAG_REG);
 
 	mov(rax, INSTR_COUNT);
 
@@ -153,7 +153,7 @@ void ChipEmitter::MOV_TO_REG(uint8_t r, const Xbyak::Operand& op)
 	if (i != NOT_ALLOCATED)
 		movzx(V_REGS_32[i], op); // breaking dependency
 	else
-		MOV(REG_PTR(r), op);
+		MOV(byte[REG_PTR(r)], op);
 }
 
 //void ChipEmitter::emitLoadAllocRegs()
@@ -188,7 +188,7 @@ bool ChipEmitter::emitPushAllocRegs()
 	}
 
 	if (rspAllocReg.has_value())
-		mov(REG_PTR(*rspAllocReg), spl);
+		mov(byte[REG_PTR(*rspAllocReg)], spl);
 
 	mov(rsp, qword[rip + rspBackup]);
 
@@ -220,7 +220,7 @@ void ChipEmitter::emitPopAllocRegs()
 	}
 
 	if (rspAllocReg.has_value())
-		movzx(esp, REG_PTR(*rspAllocReg));
+		movzx(esp, byte[REG_PTR(*rspAllocReg)]);
 }
 
 template<typename T>
@@ -359,7 +359,7 @@ void ChipEmitter::emitPrologue()
 		const auto val { allocatedVRegs[i] };
 
 		if (val != NOT_ALLOCATED && initialValUseVRegs[i])
-			movzx(V_REGS_32[val], REG_PTR(i));
+			movzx(V_REGS_32[val], byte[REG_PTR(i)]);
 	}
 }
 
@@ -370,7 +370,7 @@ void ChipEmitter::emitEpilogue(uint16_t pc)
 		const auto val { allocatedVRegs[i] };
 
 		if (val != NOT_ALLOCATED && modifiedVRegs[i])
-			mov(REG_PTR(i), V_REGS_8[val]);
+			mov(byte[REG_PTR(i)], V_REGS_8[val]);
 	}
 
 	movzx(eax, EXECUTE_FLAG_PTR);
@@ -560,7 +560,7 @@ void ChipEmitter::emit6XNN(uint8_t x, uint8_t val)
 			mov(V_REGS_32[i], val);
 	}
 	else
-		mov(REG_PTR(x), val);
+		mov(byte[REG_PTR(x)], val);
 }
 
 void ChipEmitter::emit7XNN(uint8_t x, uint8_t val)
@@ -707,7 +707,7 @@ void ChipEmitter::emit8XYE(uint8_t x, uint8_t y, bool calcFlag)
 		if (i != NOT_ALLOCATED)
 			add(V_REGS_8[i], V_REGS_8[i]); // is slightly faster than shift
 		else
-			shl(REG_PTR(x), 1);
+			shl(byte[REG_PTR(x)], 1);
 
 		if (calcFlag)
 			setc(FLAG_REG);
@@ -789,7 +789,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 				cmp(eax, ChipState::SCR_HEIGHT - width);
 				ja(drawUnknownRem, T_NEAR);
 
-				vpmovzxbq(regs[0], RAM_PTR(i));
+				vpmovzxbq(regs[0], byte[RAM_PTR(i)]);
 
 				if (calcFlag)
 					vmovdqu(regs[1], SCREEN_PTR(rax));
@@ -876,12 +876,12 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 				if (SSE41)
 				{
-					pmovzxbq(xmm0, RAM_PTR(i));
+					pmovzxbq(xmm0, word[RAM_PTR(i)]);
 					loadConsts();
 				}
 				else
 				{
-					movq(xmm0, RAM_PTR(i));
+					movq(xmm0, qword[RAM_PTR(i)]);
 
 					if (!zeroedXmm)
 					{
@@ -971,12 +971,12 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 		if (unknownRemainder)
 		{
-			lea(rdx, RAM_PTR(0));
+			lea(rdx, ptr[BASE + I_REG_64 + offsetof(ChipState, RAM)]);
 			movzx(edx, byte[rdx + r8]);
 		}
 		else
 		{
-			movzx(edx, RAM_PTR(i));
+			movzx(edx, byte[RAM_PTR(i)]);
 
 			if (calcFlag)
 			{
@@ -1079,20 +1079,20 @@ void ChipEmitter::emitFX33(uint8_t x, uint16_t pc)
 	lea(ecx, ptr[rax + 4 * rax]);
 	lea(ecx, ptr[rax + 8 * rcx]);
 	shr(ecx, 12);
-	mov(RAM_PTR(0), cl);
+	mov(byte[RAM_PTR(0)], cl);
 	cmp(I_REG_16, 0xFFF);
 	je(oob, T_NEAR);
 	imul(ecx, ecx, 100);
 	sub(eax, ecx);
 	imul(ecx, eax, 205);
 	shr(ecx, 11);
-	mov(RAM_PTR(1), cl);
+	mov(byte[RAM_PTR(1)], cl);
 	cmp(I_REG_16, 0xFFE);
 	je(oob, T_NEAR);
 	add(ecx, ecx);
 	lea(ecx, ptr[rcx + 4 * rcx]);
 	sub(al, cl);
-	mov(RAM_PTR(2), al);
+	mov(byte[RAM_PTR(2)], al);
 
 	emitSelfModifyingCodeCheck(3, pc);
 	L(oob);
@@ -1118,26 +1118,26 @@ void ChipEmitter::emitRegCopy(int cnt)
 		{
 			if constexpr (toMem)
 			{
-				vmovdqa(xmm0, REG_PTR(0));
-				vmovdqu(RAM_PTR(0), xmm0);
+				vmovdqa(xmm0, xword[REG_PTR(0)]);
+				vmovdqu(xword[RAM_PTR(0)], xmm0);
 			}
 			else
 			{
-				vmovdqu(xmm0, RAM_PTR(0));
-				vmovdqa(REG_PTR(0), xmm0);
+				vmovdqu(xmm0, xword[RAM_PTR(0)]);
+				vmovdqa(xword[REG_PTR(0)], xmm0);
 			}
 		}
 		else
 		{
 			if constexpr (toMem)
 			{
-				movdqa(xmm0, REG_PTR(0));
-				movdqu(RAM_PTR(0), xmm0);
+				movdqa(xmm0, xword[REG_PTR(0)]);
+				movdqu(xword[RAM_PTR(0)], xmm0);
 			}
 			else
 			{
-				movdqu(xmm0, RAM_PTR(0));
-				movdqa(REG_PTR(0), xmm0);
+				movdqu(xmm0, xword[RAM_PTR(0)]);
+				movdqa(xword[REG_PTR(0)], xmm0);
 			}
 		}
 
@@ -1150,13 +1150,13 @@ void ChipEmitter::emitRegCopy(int cnt)
 		{
 			if constexpr (toMem)
 			{
-				mov(rax, REG_PTR(i));
-				mov(RAM_PTR(i), rax);
+				mov(rax, qword[REG_PTR(i)]);
+				mov(qword[RAM_PTR(i)], rax);
 			}
 			else
 			{
-				mov(rax, RAM_PTR(i));
-				mov(REG_PTR(i), rax);
+				mov(rax, qword[RAM_PTR(i)]);
+				mov(qword[REG_PTR(i)], rax);
 			}
 
 			i += 8;
@@ -1167,13 +1167,13 @@ void ChipEmitter::emitRegCopy(int cnt)
 		{
 			if constexpr (toMem)
 			{
-				mov(eax, REG_PTR(i));
-				mov(RAM_PTR(i), eax);
+				mov(eax, dword[REG_PTR(i)]);
+				mov(dword[RAM_PTR(i)], eax);
 			}
 			else
 			{
-				mov(eax, RAM_PTR(i));
-				mov(REG_PTR(i), eax);
+				mov(eax, dword[RAM_PTR(i)]);
+				mov(dword[REG_PTR(i)], eax);
 
 			}
 
@@ -1185,13 +1185,13 @@ void ChipEmitter::emitRegCopy(int cnt)
 		{
 			if constexpr (toMem)
 			{
-				movzx(eax, word[BASE + offsetof(ChipState, V) + i]);
-				mov(RAM_PTR(i), ax);
+				movzx(eax, word[REG_PTR(i)]);
+				mov(word[RAM_PTR(i)], ax);
 			}
 			else
 			{
-				movzx(eax, word[BASE + I_REG_64 + offsetof(ChipState, RAM) + i]);
-				mov(REG_PTR(i), ax);
+				movzx(eax, word[RAM_PTR(i)]);
+				mov(word[REG_PTR(i)], ax);
 			}
 
 			i += 2;
@@ -1200,9 +1200,9 @@ void ChipEmitter::emitRegCopy(int cnt)
 		}
 
 		if constexpr (toMem)
-			MOV(RAM_PTR(i), V_REG(i));
+			MOV(byte[RAM_PTR(i)], V_REG(i));
 		else
-			MOV_TO_REG(i, RAM_PTR(i));
+			MOV_TO_REG(i, byte[RAM_PTR(i)]);
 
 		i++;
 		cnt--;

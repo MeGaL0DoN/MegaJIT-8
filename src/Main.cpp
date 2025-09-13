@@ -6,6 +6,15 @@
 #include <GLFW/glfw3.h>
 #include <nfd.hpp>
 
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <unistd.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
+#endif
+
 #include <array>
 #include <map>
 #include <sstream>
@@ -21,7 +30,7 @@
 #include "ChipCachedCore.h"
 #include "ChipJITCore.h"
 
-constexpr const char* APP_NAME { "MegaJIT-8" };
+constexpr auto APP_NAME { "MegaJIT-8" };
 
 enum class CoreType
 {
@@ -58,7 +67,7 @@ CoreType currentCore()
 
 bool setStats { false };
 uint64_t executedInstructions{}, accumulatedInstructions{};
-double cpuFrequency{}, totalTime{};
+double cpuFrequency{}, secondsTimer, totalTime{};
 std::string statsStr { "0000.000 MIPS | 00.000 MIPF" }, avgPerfStr { "Avg. over 0 seconds: 0000.000 MIPS" };
 
 bool unlimitedMode { true };
@@ -66,7 +75,9 @@ bool unlimitedMode { true };
 int IPF { 10 };
 bool paused { false };
 
-bool enableRainbow { false };
+bool vsync { false };
+bool lockVsyncSetting { false };
+bool rainbow { false };
 Shader pixelShader{};
 uint32_t chipTexture;
 std::array<uint8_t, ChipState::SCR_HEIGHT * ChipState::SCR_WIDTH> textureBuf;
@@ -85,7 +96,7 @@ bool fileDialogOpen { false };
 #define STR(s) s
 #endif
 
-constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bnc")} };
+constexpr nfdnfilteritem_t ROMfilterItem[2] { {STR("ROM File"), STR("ch8,bin")} };
 constexpr nfdnfilteritem_t asmFilterItem[1] { {STR("x86-64 Assembly"), STR("txt")} };
 
 Xbyak::CodeGenerator code{};
@@ -161,7 +172,7 @@ void emitCode()
     emitBurn100xCyclesFunc();
 }
 
-void setBuffers()
+void setOpenGL()
 {
     unsigned int VAO, VBO, EBO;
 
@@ -205,13 +216,6 @@ void setBuffers()
 
     pixelShader = Shader(Resources::VERTEX_SHADER, Resources::FRAGMENT_SHADER);
     pixelShader.use();
-
-    constexpr std::array<float, 4> whiteColor { 1.0f, 1.0f, 1.0f, 1.0f };
-    pixelShader.setFloat4("foregroundCol", whiteColor.data());
-
-    constexpr std::array<float, 4> blackColor { 0.0f, 0.0f, 0.0f, 1.0f };
-    pixelShader.setFloat4("backgroundCol", blackColor.data());
-
     pixelShader.setBool("rainbow", false);
 }
 
@@ -257,7 +261,7 @@ void coreThreadExecute()
     }
 }
 
-inline void startCoreThread()
+void startCoreThread()
 {
     coreThreadRunning = true;
     executeCore = true;
@@ -278,7 +282,7 @@ inline void startCoreThread()
         break;
     }
 }
-inline void stopCoreThread()
+void stopCoreThread()
 {
     coreThreadRunning = false;
     executeCore = false;
@@ -305,6 +309,14 @@ void threadSafeExec(Op func)
         func();
 }
 
+void clearStats()
+{
+    setStats = true;
+    secondsTimer = 0.0;
+    totalTime = 0.0;
+    accumulatedInstructions = 0;
+}
+
 void clearCoreCache()
 {
     threadSafeExec([&]
@@ -325,14 +337,12 @@ void clearCoreCache()
 
 void coreModeChanged()
 {
-    accumulatedInstructions = 0;
-    totalTime = 0.0;
-
     if (!coreThreadRunning)
         return;
 
     stopCoreThread();
     clearCoreCache();
+    clearStats();
     startCoreThread();
 }
 
@@ -347,8 +357,7 @@ void changePauseState()
         else
         {
             startCoreThread();
-            totalTime = 0.0;
-            accumulatedInstructions = 0;
+            clearStats();
         }
     }
 
@@ -356,36 +365,35 @@ void changePauseState()
         chipCore->resetKeys();
 }
 
-void load1dcell()
+void loadROM(std::istream& st, const std::filesystem::path& path)
 {
-    std::stringbuf buf { std::ios::in | std::ios::out };
-    buf.sputn(reinterpret_cast<const char*>(&Resources::ROM_1DCELL[0]), sizeof(Resources::ROM_1DCELL));
-    std::istream st { &buf };
-
-    setStats = true;
-
     threadSafeExec([&]
     {
-        chipCore->loadROM(st);
-        clearCoreCache();
-    });
-}
-
-void loadROM(const std::filesystem::path& path)
-{
-    setStats = true;
-
-    threadSafeExec([&]
-    {
-        if (auto st { std::ifstream { path, std::ios::binary } }; chipCore->loadROM(st))
+        if (chipCore->loadROM(st))
         {
-            currentRomPath = path;
             clearCoreCache();
+            clearStats();
+            currentRomPath = path;
 
             if (paused)
                 changePauseState();
         }
     });
+}
+
+void loadROM(const std::filesystem::path& path = "")
+{
+    if (path.empty())
+    {
+        std::stringbuf buf{ std::ios::in | std::ios::out };
+        buf.sputn(reinterpret_cast<const char*>(&Resources::ROM_1DCELL[0]), sizeof(Resources::ROM_1DCELL));
+        std::istream st{ &buf };
+        loadROM(st, "");
+        return;
+    }
+
+    auto st { std::ifstream { path, std::ios::binary } };
+    loadROM(st, path);
 }
 
 void renderImGUI()
@@ -415,12 +423,10 @@ void renderImGUI()
         }
         if (ImGui::BeginMenu("Settings", "Ctrl+Q"))
         {
-            static bool showForegroundPicker { false };
-            static bool showBackgroundPicker { false };
             static int volume { 50 };
 
-            ImGui::SeparatorText("Sound");
-            ImGui::Checkbox("Enable Sound", &ChipCore::EnableAudio);
+            ImGui::SeparatorText("Audio");
+            ImGui::Checkbox("Enable Audio", &ChipCore::EnableAudio);
 
             if (ChipCore::EnableAudio)
             {
@@ -430,73 +436,31 @@ void renderImGUI()
                     ChipCore::setVolume(volume / 100.0);
             }
 
-            ImGui::SeparatorText("UI");
+            ImGui::SeparatorText("Graphics");
 
-            if (ImGui::Checkbox("Rainbow Screen", &enableRainbow))
+            if (lockVsyncSetting) 
+                ImGui::BeginDisabled();
+
+            if (ImGui::Checkbox("VSync", &vsync))
             {
-                pixelShader.setBool("rainbow", enableRainbow);
-                showForegroundPicker = false;
+                glfwSwapInterval(vsync ? 1 : 0);
+#ifdef _WIN32
+                if (vsync)
+                    timeEndPeriod(1);
+                else
+                    timeBeginPeriod(1);
+#endif
+            }
+            if (lockVsyncSetting)
+            {
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Forced in GPU driver settings!");
+
+                ImGui::EndDisabled();
             }
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            static auto foregroundColor { ImVec4(1.0f, 1.0f, 1.0f, 1.0f) };
-            static auto backgroundColor { ImVec4(0.0f, 0.0f, 0.0f, 1.0f) };
-
-            if (!enableRainbow)
-            {
-                ImGui::Text("Foreground Color");
-                ImGui::SameLine();
-
-                if (ImGui::ArrowButton("foregroundPicker", ImGuiDir_Down))
-                {
-                    showForegroundPicker = !showForegroundPicker;
-                    showBackgroundPicker = false;
-                }
-
-                if (showForegroundPicker)
-                {
-                    if (ImGui::ColorPicker3("Pick a Color", reinterpret_cast<float*>(&foregroundColor)))
-                        pixelShader.setFloat4("foregroundCol", reinterpret_cast<float*>(&foregroundColor));
-                }
-            }
-
-            ImGui::Text("Background Color");
-            ImGui::SameLine();
-
-            if (ImGui::ArrowButton("backgroundPicker", ImGuiDir_Down))
-            {
-                showBackgroundPicker = !showBackgroundPicker;
-                showForegroundPicker = false;
-            }
-
-            if (showBackgroundPicker)
-            {
-                if (ImGui::ColorPicker3("Pick a Color", reinterpret_cast<float*>(&backgroundColor)))
-                    pixelShader.setFloat4("backgroundCol", reinterpret_cast<float*>(&backgroundColor));
-            }
-
-            ImGui::SeparatorText("Misc.");
-            if (ImGui::Button("Reset to Default"))
-            {
-                foregroundColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-                backgroundColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-
-                pixelShader.setFloat4("foregroundCol", reinterpret_cast<float*>(&foregroundColor));
-                pixelShader.setFloat4("backgroundCol", reinterpret_cast<float*>(&backgroundColor));
-
-                showForegroundPicker = false;
-                showBackgroundPicker = false;
-
-                enableRainbow = false;
-                pixelShader.setBool("rainbow", false);
-
-                ChipCore::EnableAudio = true;
-                volume = 50;
-                ChipCore::setVolume(0.5);
-            }
+            if (ImGui::Checkbox("Rainbow Screen", &rainbow))
+                pixelShader.setBool("rainbow", rainbow);
 
             ImGui::EndMenu();
         }
@@ -508,7 +472,7 @@ void renderImGUI()
             switch (currentCore())
             {
             case CoreType::JIT:
-                if (ImGui::Button("JIT"))
+                if (ImGui::Button("JIT Compiler (x64)"))
                 {
                     chipCore = &chipAsmInterpretCore;
                     coreModeChanged();
@@ -541,21 +505,21 @@ void renderImGUI()
                 }
                 break;
             case CoreType::AsmInterpret:
-                if (ImGui::Button("ASM Interpreter"))
+                if (ImGui::Button("Interpreter (ASM)"))
                 {
                     chipCore = &chipInterpretCore;
                     coreModeChanged();
                 }
                 break;
             case CoreType::Interpret:
-                if (ImGui::Button("Interpreter"))
+                if (ImGui::Button("Interpreter (C++)"))
                 {
                     chipCore = &chipCachedCore;
                     coreModeChanged();
                 }
                 break;
             default:
-                if (ImGui::Button("Cached Interoreter"))
+                if (ImGui::Button("Cached Interp. (C++)"))
                 {
                     chipCore = &chipJITCore;
                     coreModeChanged();
@@ -585,8 +549,7 @@ void renderImGUI()
                     if (!paused)
                         startCoreThread();
 
-                    totalTime = 0.0;
-                    accumulatedInstructions = 0;
+                    clearStats();
                 }
                 else
                 {
@@ -606,7 +569,7 @@ void renderImGUI()
 
                 if (ImGui::Button("Bench"))
                 {
-                    load1dcell();
+                    loadROM();
                     currentRomPath.clear();
                 }
             }
@@ -741,9 +704,7 @@ void window_refresh_callback(GLFWwindow* _window)
 }
 
 #ifdef _WIN32
-#include <Windows.h>
-
-inline std::wstring ToUTF16(const std::string& utf8Str)
+std::wstring ToUTF16(const std::string& utf8Str)
 {
     const auto size { MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), nullptr, 0) };
 
@@ -754,15 +715,9 @@ inline std::wstring ToUTF16(const std::string& utf8Str)
     MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), static_cast<int>(utf8Str.length()), result.data(), size);
     return result;
 }
-
-#elif defined(__linux__) || defined(__unix__)
-#include <unistd.h>
-#elif defined(__APPLE__)
-#include <unistd.h>
-#include <libproc.h>
 #endif
 
-inline std::filesystem::path getExecutablePath()
+std::filesystem::path getExecutablePath()
 {
 #ifdef _WIN32
     wchar_t pathBuf[MAX_PATH];
@@ -849,6 +804,35 @@ bool setGLFW()
     return true;
 }
 
+void checkVSyncStatus()
+{
+#if defined (__APPLE__)
+    glfwSwapInterval(0);
+    lockVsyncSetting = true;
+#elif defined(_WIN32) 
+    const auto vsyncCheckFunc { reinterpret_cast<int(*)()>(glfwGetProcAddress("wglGetSwapIntervalEXT")) };
+
+    glfwSwapInterval(1);
+
+    if (!vsyncCheckFunc())
+        lockVsyncSetting = true;
+    else
+    {
+        glfwSwapInterval(0);
+
+        if (vsyncCheckFunc())
+        {
+            vsync = true;
+            lockVsyncSetting = true;
+        }
+        else
+            timeBeginPeriod(1);
+    }
+#else
+    glfwSwapInterval(0);
+#endif
+}
+
 void setImGUI()
 {
     IMGUI_CHECKVERSION();
@@ -872,53 +856,79 @@ int main()
     if (!setGLFW())
         return -1;
 
+    setOpenGL();
     setImGUI();
-    NFD_Init();
     setWindowSize();
-    setBuffers();
+    checkVSyncStatus();
+    NFD_Init();
     emitCode();
 
     srand(time(nullptr));
 
     std::thread initThread { ChipCore::initAudio };
-    load1dcell();
+    initThread.detach();
+    loadROM();
     startCoreThread();
 
-    double lastTime { glfwGetTime() }, executeTimer{}, secondsTimer{};
+    double lastTime { glfwGetTime() }, execTimer{};
     constexpr double FRAME_RATE { 1.0 / 60 };
 
     while (!glfwWindowShouldClose(window))
     {
-        double currentTime = glfwGetTime();
-        double deltaTime = currentTime - lastTime;
+        const double currentTime { glfwGetTime() };
+        const double deltaTime { currentTime - lastTime };
 
-        executeTimer += deltaTime;
+        lastTime = currentTime;
+        execTimer += deltaTime;
         secondsTimer += deltaTime;
 
-        glfwPollEvents();
+        const bool frameElapsed { vsync || execTimer >= FRAME_RATE };
 
-        if (executeTimer >= FRAME_RATE)
+        if (frameElapsed)
+            glfwPollEvents();
+        else if (!vsync)
         {
-            threadSafeExec([&]
+            const double remainder { FRAME_RATE - execTimer };
+
+            constexpr double SLEEP_THRESHOLD =
+#ifdef _WIN32
+                0.002;
+#else
+                0.001;
+#endif
+            if (remainder >= SLEEP_THRESHOLD)
             {
-                while (executeTimer >= FRAME_RATE)
+                // Sleep on windows is less precise than linux/macOS, even with timeBeginPeriod(1). So need to sleep less time.
+                const std::chrono::duration<double> sleepTime {
+#ifdef _WIN32
+                    remainder <= 0.004 ? 0.001 : remainder <= 0.006 ? 0.002 : remainder / 1.6
+#else
+                    remainder / 1.5
+#endif
+                };
+                std::this_thread::sleep_for(sleepTime);
+            }
+        }
+
+        if (execTimer >= FRAME_RATE)
+        {
+            if (!paused)
+            {
+                threadSafeExec([&]
                 {
-                    executeTimer -= FRAME_RATE;
+                    chipCore->updateTimers();
 
-                    if (!paused)
+                    if (!unlimitedMode)
                     {
-                        chipCore->updateTimers();
-
-                        if (!unlimitedMode)
-                        {
-                            for (int i = 0; i < IPF;)
-                                i += static_cast<int>(chipCore->execute());
-                        }
+                        for (int i = 0; i < IPF;)
+                            i += static_cast<int>(chipCore->execute());
                     }
-                }
 
-                copyChipScreenBuf();
-            });
+                    copyChipScreenBuf();
+                });
+            }
+
+            execTimer -= FRAME_RATE;
         }
 
         if (secondsTimer >= 1.0)
@@ -934,6 +944,10 @@ int main()
                     executedInstructions = static_cast<uint64_t>(static_cast<double>(executedInstructions) / secondsTimer);
                     accumulatedInstructions += executedInstructions;
                     totalTime += secondsTimer;
+
+                    oss << "Avg. over " << static_cast<int>(totalTime) << " seconds: " << ((accumulatedInstructions / static_cast<int>(totalTime)) / 1e6) << " MIPS";
+                    avgPerfStr = oss.str();
+                    oss.str("");
                 }
                 else
                     executedInstructions = 0;
@@ -950,25 +964,19 @@ int main()
                 oss.str("");
                 oss << mips << " MIPS | " << mipf << " MIPF";
                 statsStr = oss.str();
-
-                oss.str("");
-                oss << "Avg. over " << static_cast<int>(totalTime) << " seconds: " << ((accumulatedInstructions / static_cast<int>(totalTime)) / 1e6) << " MIPS";
-                avgPerfStr = oss.str();
             }
 
             secondsTimer = 0;
         }
 
-        render();
-        lastTime = currentTime;
+        if (frameElapsed)
+            render();
     }
 
     NFD_Quit();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     glfwTerminate();
-
-    initThread.join();
 
     if (coreThreadRunning)
         stopCoreThread();
