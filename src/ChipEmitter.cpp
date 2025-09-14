@@ -789,7 +789,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 				cmp(eax, ChipState::SCR_HEIGHT - width);
 				ja(drawUnknownRem, T_NEAR);
 
-				vpmovzxbq(regs[0], byte[RAM_PTR(i)]);
+				vpmovzxbq(regs[0], ptr[RAM_PTR(i)]);
 
 				if (calcFlag)
 					vmovdqu(regs[1], SCREEN_PTR(rax));
@@ -876,7 +876,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 				if (SSE41)
 				{
-					pmovzxbq(xmm0, word[RAM_PTR(i)]);
+					pmovzxbq(xmm0, ptr[RAM_PTR(i)]);
 					loadConsts();
 				}
 				else
@@ -971,7 +971,7 @@ void ChipEmitter::emitDXYN(uint8_t x, uint8_t y, uint8_t n, bool calcFlag)
 
 		if (unknownRemainder)
 		{
-			lea(rdx, ptr[BASE + I_REG_64 + offsetof(ChipState, RAM)]);
+			lea(rdx, ptr[RAM_PTR(0)]);
 			movzx(edx, byte[rdx + r8]);
 		}
 		else

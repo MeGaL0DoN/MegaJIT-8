@@ -431,6 +431,7 @@ private:
 	{
 		s.pc -= 2;
 		assert(false);
+		while (executeFlag.load(std::memory_order_relaxed)) {}
 	}
 
 	void op_00E0(Instruction instr)

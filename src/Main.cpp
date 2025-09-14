@@ -453,10 +453,10 @@ void renderImGUI()
             }
             if (lockVsyncSetting)
             {
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Forced in GPU driver settings!");
-
                 ImGui::EndDisabled();
+
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Forced in GPU driver settings!");;
             }
 
             if (ImGui::Checkbox("Rainbow Screen", &rainbow))

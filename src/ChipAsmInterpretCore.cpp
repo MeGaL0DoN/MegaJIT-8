@@ -202,7 +202,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 		and_(ecx, 0xF);
 	};
 
-	align(64);
+	align(128);
 	L(op00E0);
 	if (Xbyak::util::Cpu().has(Xbyak::util::Cpu::tAVX))
 	{
@@ -222,20 +222,20 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	}
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op00EE);
 	dec(SP_32);
 	movzx(ecx, SP_8);
 	movzx(PC_32, STACK_PTR(rcx));
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op1NNN);
 	loadNNN();
 	movzx(PC_32, ax);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op2NNN);
 	movzx(ecx, SP_8);
 	loadNNN();
@@ -244,7 +244,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	inc(SP_32);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op3XNN);
 	loadVxPtr();
 	cmp(V_REG(rcx), ah);
@@ -254,7 +254,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipNotEq);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op4XNN);
 	loadVxPtr();
 	cmp(V_REG(rcx), ah);
@@ -264,7 +264,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipEq);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op5XY0);
 	loadVyAndVxPtr();
 	cmp(V_REG(rcx), al);
@@ -274,60 +274,60 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipRegNotEq);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op6XNN);
 	loadVxPtr();
 	mov(V_REG(rcx), ah);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op7XNN);
 	loadVxPtr();
 	add(V_REG(rcx), ah);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY0);
 	loadVyAndVxPtr();
 	mov(V_REG(rcx), al);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY1);
 	loadVyAndVxPtr();
 	or_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY2);
 	loadVyAndVxPtr();
 	and_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY3);
 	loadVyAndVxPtr();
 	xor_(V_REG(rcx), al);
 	mov(FLAG_REG, 0); // VF reset quirk
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY4);
 	loadVyAndVxPtr();
 	add(V_REG(rcx), al);
 	setc(FLAG_REG);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY5);
 	loadVyAndVxPtr();
 	sub(V_REG(rcx), al);
 	setnc(FLAG_REG);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY6); // shifting quirk
 	loadVyAndVxPtr();
 	shr(eax, 1);
@@ -335,7 +335,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setc(FLAG_REG);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XY7);
 	loadVyAndVxPtr();
 	sub(al, V_REG(rcx));
@@ -343,7 +343,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setnc(FLAG_REG);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op8XYE); // shifting quirk
 	loadVyAndVxPtr();
 	add(al, al);
@@ -351,7 +351,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	setc(FLAG_REG);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(op9XY0);
 	loadVyAndVxPtr();
 	cmp(V_REG(rcx), al);
@@ -361,13 +361,13 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipRegEq);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opANNN);
 	loadNNN();
 	movzx(I_REG_32, ax);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opBNNN); // jumping quirk off
 	movzx(ecx, V_REG(0));
 	loadNNN();
@@ -376,7 +376,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	and_(PC_32, 0xFFF);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opCXNN);
 	mov(ecx, eax);
 	rdtsc(); // using cpu timestamp as a random number
@@ -385,12 +385,12 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(V_REG(rcx), al);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opDXY0);
 	mov(FLAG_REG, 0);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opDXY1);
 	loadVyAndVxPtr();
 	movzx(r8d, RAM_PTR(0));
@@ -405,7 +405,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(SCREEN_PTR(rax), r8);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opDXYN);
 	Xbyak::Label dxynEnd;
 	movzx(edx, ah);
@@ -438,7 +438,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(dxynEnd);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opEX9E);
 	loadVx();
 	and_(eax, 0xF);
@@ -450,7 +450,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipNotPressed);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opEXA1);
 	loadVx();
 	and_(eax, 0xF);
@@ -462,14 +462,14 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(skipPressed);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX07);
 	movzx(ecx, DELAY_PTR);
 	and_(eax, 0xF);
 	mov(V_REG(rax), cl);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX0A);
 	Xbyak::Label waitKey;
 	sub(PC_32, 2);
@@ -491,33 +491,33 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	mov(FX0A_FLAG_PTR, 1);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX15);
 	loadVx();
 	mov(DELAY_PTR, al);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX18);
 	loadVx();
 	mov(SOUND_PTR, al);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX1E);
 	loadVx();
 	add(I_REG_32, eax);
 	and_(I_REG_32, 0xFFF);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX29);
 	loadVx();
 	and_(eax, 0xF);
 	lea(I_REG_32, ptr[rax + rax * 4]);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX33);
 	Xbyak::Label fx33oob;
 	loadVx();
@@ -541,7 +541,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(fx33oob);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX55);
 	Xbyak::Label fx55end, fx55oob;
 	and_(eax, 0xF);
@@ -565,7 +565,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	L(fx55oob);
 	DISPATCH();
 
-	align(64);
+	align(128);
 	L(opFX65);
 	Xbyak::Label fx65end;
 	and_(eax, 0xF);
@@ -586,6 +586,7 @@ ChipAsmInterpretCore::ChipAsmInterpretCore(ChipState& s, std::atomic<bool>& exec
 	DISPATCH();
 
 	L(opInvalid);
+	sub(PC_32, 2);
 #ifndef _WIN32
 	push(rdi);
 	push(rsi);

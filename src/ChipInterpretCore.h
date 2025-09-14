@@ -306,7 +306,7 @@ public:
 	invalid:
 		pc -= 2; 
 		assert(false);
-		DISPATCH();
+		while (executeFlag.load(std::memory_order_relaxed)) {}
 
 	end:
 		s.pc = pc;
